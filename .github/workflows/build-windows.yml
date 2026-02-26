@@ -32,63 +32,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      - name: Build frontend
-        run: npm run build
-
-      - name: Cargo check (type-check Rust code)
-        shell: pwsh
-        working-directory: src-tauri
-        run: |
-          $output = cargo check --release 2>&1 | Out-String
-          $output | Out-File -FilePath ../cargo-check.txt
-          $errors = $output -split "`n" | Where-Object { $_ -match "^error" }
-          foreach ($err in $errors) {
-            echo "::error::$err"
-          }
-          if ($LASTEXITCODE -ne 0) {
-            echo "::error::cargo check failed. Last 50 lines:"
-            $lines = $output -split "`n"
-            $last50 = $lines | Select-Object -Last 50
-            foreach ($line in $last50) {
-              echo "::error::$line"
-            }
-            exit $LASTEXITCODE
-          }
-
       - name: Build Tauri app
-        shell: pwsh
-        run: |
-          npx tauri build --ci 2>&1 | Tee-Object -FilePath build-output.txt
-          if ($LASTEXITCODE -ne 0) {
-            echo "::error::Tauri build failed with exit code $LASTEXITCODE"
-            $lines = Get-Content build-output.txt | Select-Object -Last 50
-            foreach ($line in $lines) {
-              echo "::error::$line"
-            }
-            exit $LASTEXITCODE
-          }
+        run: npx tauri build
         env:
           RUST_BACKTRACE: 1
 
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: |
-            build-output.txt
-            cargo-check.txt
-          if-no-files-found: ignore
-
       - name: Upload NSIS installer
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: reattend-windows-installer
           path: src-tauri/target/release/bundle/nsis/*.exe
 
       - name: Upload MSI installer
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: reattend-windows-msi
