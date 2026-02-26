@@ -32,14 +32,39 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cargo check (type-check Rust code)
+        shell: pwsh
+        working-directory: src-tauri
+        run: |
+          $output = cargo check --release 2>&1 | Out-String
+          $output | Out-File -FilePath ../cargo-check.txt
+          $errors = $output -split "`n" | Where-Object { $_ -match "^error" }
+          foreach ($err in $errors) {
+            echo "::error::$err"
+          }
+          if ($LASTEXITCODE -ne 0) {
+            echo "::error::cargo check failed. Last 50 lines:"
+            $lines = $output -split "`n"
+            $last50 = $lines | Select-Object -Last 50
+            foreach ($line in $last50) {
+              echo "::error::$line"
+            }
+            exit $LASTEXITCODE
+          }
+
       - name: Build Tauri app
         shell: pwsh
         run: |
-          npx tauri build 2>&1 | Tee-Object -FilePath build-output.txt
+          npx tauri build --ci 2>&1 | Tee-Object -FilePath build-output.txt
           if ($LASTEXITCODE -ne 0) {
             echo "::error::Tauri build failed with exit code $LASTEXITCODE"
-            echo "--- Last 100 lines of build output ---"
-            Get-Content build-output.txt | Select-Object -Last 100
+            $lines = Get-Content build-output.txt | Select-Object -Last 50
+            foreach ($line in $lines) {
+              echo "::error::$line"
+            }
             exit $LASTEXITCODE
           }
         env:
@@ -50,7 +75,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: build-log
-          path: build-output.txt
+          path: |
+            build-output.txt
+            cargo-check.txt
           if-no-files-found: ignore
 
       - name: Upload NSIS installer
