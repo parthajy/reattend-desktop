@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/tauri-v2/packages/cli/schema.json",
+  "identifier": "default",
+  "description": "Default permissions for Reattend desktop",
+  "windows": ["*"],
+  "permissions": [
+    "core:default",
+    "global-shortcut:default",
+    "shell:default",
+    "notification:default",
+    "store:default",
+    "core:window:allow-create",
+    "core:window:allow-close",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-center"
+  ]
+}

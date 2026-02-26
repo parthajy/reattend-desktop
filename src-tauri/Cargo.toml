@@ -1,0 +1,37 @@
+[package]
+name = "reattend-desktop"
+version = "0.1.0"
+description = "Reattend Desktop — ambient memory layer for your Mac"
+authors = ["Reattend"]
+edition = "2021"
+
+[lib]
+name = "reattend_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+cc = "1"
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+urlencoding = "2"
+
+# Cross-platform: clipboard, active window, screenshots
+arboard = "3"
+active-win-pos-rs = "0.8"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows-only: simulate keystrokes, screenshots, image processing, base64
+enigo = "0.6"
+xcap = "0.8"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
