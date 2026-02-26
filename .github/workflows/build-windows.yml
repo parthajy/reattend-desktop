@@ -28,9 +28,9 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
-        run: npx tauri build --verbose 2>&1
+        uses: tauri-apps/tauri-action@v0
         env:
-          RUST_BACKTRACE: 1
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
