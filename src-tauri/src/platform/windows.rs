@@ -57,34 +57,42 @@ pub fn platform_get_active_app_name() -> String {
 /// Capture the screen and perform OCR via server-side Tesseract.
 /// Takes a screenshot with xcap, compresses it, and sends to the server.
 pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Result<serde_json::Value, String> {
-    // Step 1: Capture screenshot via xcap
-    let monitors = xcap::Monitor::all().map_err(|e| format!("Monitor error: {}", e))?;
-    let primary = monitors
-        .into_iter()
-        .find(|m| m.is_primary().unwrap_or(false))
-        .or_else(|| xcap::Monitor::all().ok()?.into_iter().next())
-        .ok_or("No monitor found")?;
+    // Steps 1-4 run in spawn_blocking because xcap types are !Send
+    let (base64_image, app_name) = tokio::task::spawn_blocking(|| -> Result<(String, String), String> {
+        // Step 1: Capture screenshot via xcap
+        let monitors = xcap::Monitor::all().map_err(|e| format!("Monitor error: {}", e))?;
+        let primary = monitors
+            .into_iter()
+            .find(|m| m.is_primary().unwrap_or(false))
+            .or_else(|| xcap::Monitor::all().ok()?.into_iter().next())
+            .ok_or("No monitor found")?;
 
-    let image = primary.capture_image().map_err(|e| format!("Capture error: {}", e))?;
+        let image = primary.capture_image().map_err(|e| format!("Capture error: {}", e))?;
 
-    // Step 2: Resize to 25% for bandwidth efficiency
-    let (w, h) = (image.width(), image.height());
-    let resized = image::imageops::resize(
-        &image,
-        w / 4,
-        h / 4,
-        image::imageops::FilterType::Triangle,
-    );
+        // Step 2: Resize to 25% for bandwidth efficiency
+        let (w, h) = (image.width(), image.height());
+        let resized = image::imageops::resize(
+            &image,
+            w / 4,
+            h / 4,
+            image::imageops::FilterType::Triangle,
+        );
 
-    // Step 3: Encode as JPEG (small size) → base64
-    let mut buf = std::io::Cursor::new(Vec::new());
-    resized
-        .write_to(&mut buf, image::ImageFormat::Jpeg)
-        .map_err(|e| format!("JPEG encode error: {}", e))?;
-    let base64_image = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+        // Step 3: Encode as JPEG (small size) → base64
+        let mut buf = std::io::Cursor::new(Vec::new());
+        resized
+            .write_to(&mut buf, image::ImageFormat::Jpeg)
+            .map_err(|e| format!("JPEG encode error: {}", e))?;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
 
-    // Step 4: Get active app name
-    let app_name = platform_get_active_app_name();
+        // Step 4: Get active app name
+        let app_name = platform_get_active_app_name();
+
+        Ok((b64, app_name))
+    })
+    .await
+    .map_err(|e| format!("Capture task panicked: {}", e))?
+    ?;
 
     // Step 5: Get server config
     let store = app_handle.store("config.json").map_err(|e| e.to_string())?;
@@ -120,7 +128,6 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
     }
 
     let mut result: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    // Ensure appName is set (server might not return it)
     if result.get("appName").is_none() {
         result["appName"] = serde_json::json!(app_name);
     }
