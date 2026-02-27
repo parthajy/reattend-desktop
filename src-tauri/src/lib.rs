@@ -206,6 +206,31 @@ async fn run_ocr_capture(app: tauri::AppHandle) -> Result<serde_json::Value, Str
     platform::platform_capture_screen_ocr(&app).await
 }
 
+// ── Productive apps: OCR more frequently (every 20s instead of 60s) ────────
+// Browsers, docs, email, chat, PM tools — where writing and reading happen
+const PRODUCTIVE_APPS: &[&str] = &[
+    // Browsers — Gmail, Google Docs, Linear, etc. all run here
+    "google chrome", "chrome", "safari", "firefox", "arc", "brave",
+    "microsoft edge", "edge", "opera", "vivaldi",
+    // Email clients
+    "mail", "outlook", "spark", "airmail", "thunderbird",
+    // Docs & notes
+    "notes", "obsidian", "notion", "bear", "craft",
+    "pages", "microsoft word", "google docs", "textedit",
+    // Chat & meetings
+    "slack", "microsoft teams", "zoom", "discord", "telegram", "whatsapp",
+    // PM tools
+    "linear", "jira", "asana", "trello", "clickup", "todoist", "things",
+    // Design
+    "figma", "sketch", "miro",
+];
+
+/// Check if app is a productive app (deserves faster OCR)
+fn is_productive_app(app_name: &str) -> bool {
+    let lower = app_name.to_lowercase();
+    PRODUCTIVE_APPS.iter().any(|app| lower.contains(app))
+}
+
 // ── Apps that should NEVER trigger screen capture ──────────────────────────
 // Sensitive (passwords/keys), system utilities, media players, dev tools (pure code noise)
 const SKIP_APPS: &[&str] = &[
@@ -244,6 +269,66 @@ fn should_skip_app(app_name: &str) -> bool {
     SKIP_APPS.iter().any(|skip| lower.contains(skip))
 }
 
+/// Check if a line looks like a domain listing (e.g., "example.com $12.99/yr Available")
+fn is_domain_or_product_listing(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    // Domain TLDs
+    let tlds = [".com", ".net", ".org", ".io", ".xyz", ".co", ".dev", ".app",
+                ".me", ".info", ".biz", ".us", ".uk", ".de", ".fr", ".in",
+                ".ai", ".tech", ".store", ".online", ".site", ".club"];
+    let has_tld = tlds.iter().any(|tld| {
+        if let Some(pos) = lower.find(tld) {
+            let after = pos + tld.len();
+            after >= lower.len() || !lower.as_bytes()[after].is_ascii_alphanumeric()
+        } else {
+            false
+        }
+    });
+    // Price patterns
+    let has_price = lower.contains('$') || lower.contains('€') || lower.contains('£')
+        || lower.contains("/yr") || lower.contains("/mo") || lower.contains("per year")
+        || lower.contains("per month");
+    // Commerce/status words
+    let commerce_words = ["available", "taken", "premium", "add to cart", "buy now",
+        "register", "renew", "transfer", "in stock", "out of stock", "sale",
+        "free shipping", "add to bag", "wishlist", "compare"];
+    let has_commerce = commerce_words.iter().any(|w| lower.contains(w));
+
+    // Domain listing: has TLD + price or commerce word
+    if has_tld && (has_price || has_commerce) { return true; }
+    // Product listing: has price + commerce word + short line
+    if has_price && has_commerce && line.split_whitespace().count() < 15 { return true; }
+
+    false
+}
+
+/// Get a structural "shape" for a line — used for tabular/repetition detection
+fn line_shape(line: &str) -> Vec<u8> {
+    line.split_whitespace()
+        .map(|w| {
+            let is_num = w.chars().all(|c| c.is_ascii_digit() || c == '.' || c == ',' || c == '$' || c == '€' || c == '%');
+            if is_num { b'N' }
+            else if w.len() <= 3 { b'S' }
+            else { b'W' }
+        })
+        .collect()
+}
+
+/// Extract text that is NEW compared to previous text (for writing detection)
+fn extract_delta_text(previous: &str, current: &str) -> String {
+    let prev_lines: std::collections::HashSet<&str> = previous.lines()
+        .map(|l| l.trim())
+        .filter(|l| l.len() >= 5)
+        .collect();
+
+    let new_lines: Vec<&str> = current.lines()
+        .map(|l| l.trim())
+        .filter(|l| l.len() >= 5 && !prev_lines.contains(l))
+        .collect();
+
+    new_lines.join("\n")
+}
+
 /// Clean raw OCR text — strip UI noise, keep substantive content.
 fn clean_ocr_text(raw: &str) -> String {
     let mut cleaned_lines: Vec<&str> = Vec::new();
@@ -260,6 +345,9 @@ fn clean_ocr_text(raw: &str) -> String {
             if !trimmed.contains(' ') && trimmed.contains('/') { continue; }
         }
 
+        // Skip domain/product listings
+        if is_domain_or_product_listing(trimmed) { continue; }
+
         // Skip browser tab bars: many short segments separated by | or X
         let pipe_count = trimmed.matches('|').count();
         if pipe_count >= 2 && trimmed.len() < 300 {
@@ -271,6 +359,12 @@ fn clean_ocr_text(raw: &str) -> String {
         let alpha_count = trimmed.chars().filter(|c| c.is_alphabetic()).count();
         let total_count = trimmed.chars().count();
         if total_count > 0 && (alpha_count as f64 / total_count as f64) < 0.35 { continue; }
+
+        // Skip price-heavy lines (e.g., "$12.99  $24.99  $49.99")
+        let price_count = trimmed.matches('$').count()
+            + trimmed.matches('€').count()
+            + trimmed.matches('£').count();
+        if price_count >= 2 { continue; }
 
         // Skip known menu bar patterns
         let lower = trimmed.to_lowercase();
@@ -302,6 +396,32 @@ fn clean_ocr_text(raw: &str) -> String {
         }
 
         cleaned_lines.push(trimmed);
+    }
+
+    // --- Repetition filter: detect tabular/grid data ---
+    // If many lines share the same structural shape, it's likely a table or listing.
+    if cleaned_lines.len() >= 5 {
+        let shapes: Vec<Vec<u8>> = cleaned_lines.iter().map(|l| line_shape(l)).collect();
+        let mut shape_counts: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
+        for shape in &shapes {
+            if !shape.is_empty() {
+                *shape_counts.entry(shape.clone()).or_insert(0) += 1;
+            }
+        }
+        if let Some((dominant_shape, &count)) = shape_counts.iter().max_by_key(|(_, c)| *c) {
+            if count >= 5 && (count as f64 / cleaned_lines.len() as f64) > 0.4 {
+                let dominant = dominant_shape.clone();
+                let mut kept = 0;
+                cleaned_lines.retain(|line| {
+                    if line_shape(line) == dominant {
+                        kept += 1;
+                        kept <= 2
+                    } else {
+                        true
+                    }
+                });
+            }
+        }
     }
 
     // Second pass: group into content blocks and score them.
@@ -412,12 +532,16 @@ async fn save_selection(app_handle: tauri::AppHandle) {
 /// Background "Passive Second Brain" loop:
 /// 1. Clipboard monitoring (every ~6s) → capture for triage
 /// 2. App switch detection (every 4s) → triggers early OCR
-/// 3. OCR screen capture (every 60s or on app switch) → capture for triage + ambient recall
+/// 3. OCR screen capture (dynamic: 20s for productive apps, 60s otherwise)
+/// 4. Writing detection via text deltas → separate capture stream
+/// 5. Ambient recall on every OCR cycle
 async fn passive_capture_loop(app_handle: tauri::AppHandle) {
     let mut last_ocr_text = String::new();
     let mut last_clipboard_text = String::new();
     let mut last_app_name = String::new();
     let mut ticks: u32 = 0; // Each tick = 2s
+    // Per-app text tracking for writing delta detection
+    let mut per_app_text: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -464,15 +588,19 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
             if !current_app.is_empty() && current_app != "Unknown" {
                 if current_app != last_app_name && !last_app_name.is_empty() {
                     last_app_name = current_app;
-                    ticks = 29; // Force OCR on next 2s tick
+                    // Force OCR on next tick — use productive-aware interval
+                    let next_ocr = if is_productive_app(&last_app_name) { 9 } else { 29 };
+                    ticks = next_ocr;
                 } else {
                     last_app_name = current_app;
                 }
             }
         }
 
-        // --- Signal 3: OCR screen capture (every 60s or after app switch) ---
-        if ticks % 30 == 0 {
+        // --- Signal 3: OCR screen capture (dynamic interval) ---
+        // Productive apps: every 20s (ticks % 10), others: every 60s (ticks % 30)
+        let ocr_interval: u32 = if is_productive_app(&last_app_name) { 10 } else { 30 };
+        if ticks % ocr_interval == 0 {
             // Run OCR via platform-specific implementation
             let ocr_result = match platform::platform_capture_screen_ocr(&app_handle).await {
                 Ok(v) => v,
@@ -498,9 +626,39 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                 continue;
             }
 
-            // Skip if text hasn't changed significantly
+            // --- Writing detection via text deltas ---
+            // Compare with previous OCR for this specific app to find new text
+            if is_productive_app(&app_name) {
+                let prev_text = per_app_text.get(&app_name).cloned().unwrap_or_default();
+                if !prev_text.is_empty() {
+                    let delta = extract_delta_text(&prev_text, &cleaned);
+                    let delta_words = delta.split_whitespace().count();
+                    // If there's meaningful new text (15+ words), it's likely user writing
+                    if delta_words >= 15 {
+                        let delta_text = if delta.len() > 2000 {
+                            delta.chars().take(2000).collect::<String>()
+                        } else {
+                            delta.clone()
+                        };
+                        let meta = serde_json::json!({
+                            "capture_type": "writing",
+                            "app_name": &app_name,
+                        });
+                        let url_w = url.clone();
+                        let token_w = token.clone();
+                        tokio::spawn(async move {
+                            let _ = api::capture(&url_w, &token_w, &delta_text, "writing", Some(meta)).await;
+                        });
+                    }
+                }
+                per_app_text.insert(app_name.clone(), cleaned.clone());
+            }
+
+            // Skip if text hasn't changed significantly (for screen capture)
             let similarity = text_similarity(&last_ocr_text, &cleaned);
             if similarity > 0.75 && !app_switched {
+                // Even if we skip screen capture, still try ambient recall
+                // (the screen content might match memories even if unchanged)
                 continue;
             }
             last_ocr_text = cleaned.clone();
