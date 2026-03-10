@@ -43,8 +43,11 @@ if (platform === "darwin") {
   conf.bundle.resources = ["swift-plugin/.build/release/reattend-capture"];
 } else {
   console.log(`[prebuild] ${platform} — skipping Swift build (OCR is server-side)`);
-  // No resources needed on Windows
-  delete conf.bundle.resources;
+  // Ensure no macOS resources on Windows
+  if (conf.bundle.resources) {
+    console.log("[prebuild] Removing macOS resources from config");
+    delete conf.bundle.resources;
+  }
 }
 
 fs.writeFileSync(confPath, JSON.stringify(conf, null, 2) + "\n");
