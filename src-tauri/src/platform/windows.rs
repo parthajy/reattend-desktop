@@ -1,5 +1,4 @@
 use tauri_plugin_global_shortcut::Modifiers;
-use tauri_plugin_store::StoreExt;
 use base64::Engine;
 
 /// Elevate a window — no-op on Windows (Tauri always_on_top handles it).
@@ -15,6 +14,11 @@ pub fn platform_activate_app() {
 /// Hide app from taskbar — no-op on Windows (tray-only apps don't show).
 pub fn platform_hide_from_dock() {
     // Tray-only Tauri apps on Windows don't appear in the taskbar by default
+}
+
+/// Show app in taskbar — no-op on Windows (main window shows automatically).
+pub fn platform_show_in_dock() {
+    // Windows shows the window in the taskbar automatically
 }
 
 /// Simulate Ctrl+C to copy the current selection.
@@ -94,33 +98,38 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
     .map_err(|e| format!("Capture task panicked: {}", e))?
     ?;
 
-    // Step 5: Get server config
-    let store = app_handle.store("config.json").map_err(|e| e.to_string())?;
-    let url = store
-        .get("api_url")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "https://reattend.com".to_string());
-    let token = store
-        .get("api_token")
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_default();
+    // Step 5: Get server config from database (consistent with rest of app)
+    use tauri::Manager;
+    let db = app_handle
+        .try_state::<std::sync::Arc<crate::db::Database>>()
+        .ok_or("Database not initialized")?;
+    let url = db.get_config("server_url")
+        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+    let token = db.get_config("auth_token").unwrap_or_default();
+    let device_id = db.get_config("device_id").unwrap_or_default();
 
-    if token.is_empty() {
-        return Err("No API token configured".to_string());
+    if token.is_empty() && device_id.is_empty() {
+        return Err("No authentication configured (need API token or device ID)".to_string());
     }
 
     // Step 6: Send to server for OCR
     let client = reqwest::Client::new();
-    let resp = client
+    let mut req = client
         .post(format!("{}/api/tray/ocr", url))
-        .header("Authorization", format!("Bearer {}", token))
         .json(&serde_json::json!({
             "image": base64_image,
             "app_name": &app_name,
         }))
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await
+        .timeout(std::time::Duration::from_secs(30));
+
+    if !device_id.is_empty() {
+        req = req.header("X-Device-Id", &device_id);
+    }
+    if !token.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let resp = req.send().await
         .map_err(|e| format!("OCR request failed: {}", e))?;
 
     if !resp.status().is_success() {

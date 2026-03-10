@@ -4,6 +4,12 @@
 <dict>
     <key>LSUIElement</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Reattend reads your screen to passively capture and remember important information like meeting notes, decisions, and action items.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Reattend uses accessibility features to detect active applications and save selected text.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Reattend records meeting audio to transcribe and save as memories with action items and decisions.</string>
     <key>NSServices</key>
     <array>
         <dict>

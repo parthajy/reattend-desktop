@@ -121,6 +121,10 @@ export function SettingsWindow() {
             return (
               <div className="space-y-1 text-[12px]">
                 <div className="flex justify-between text-gray-600">
+                  <span>Open Reattend</span>
+                  <kbd className="bg-white px-1.5 py-0.5 rounded border border-gray-200 text-[11px] font-mono">{mod}O</kbd>
+                </div>
+                <div className="flex justify-between text-gray-600">
                   <span>Quick Capture</span>
                   <kbd className="bg-white px-1.5 py-0.5 rounded border border-gray-200 text-[11px] font-mono">{mod}R</kbd>
                 </div>

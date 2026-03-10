@@ -88,6 +88,64 @@ void register_services_provider(void) {
     }
 }
 
+// ── Screen Recording permission check (macOS 10.15+) ─────────────────────
+// Uses CGPreflightScreenCaptureAccess which returns instantly without prompting.
+
+bool check_screen_capture_permission(void) {
+    if (@available(macOS 10.15, *)) {
+        return CGPreflightScreenCaptureAccess();
+    }
+    return true; // pre-Catalina: no permission needed
+}
+
+// Request screen capture permission (shows the system prompt if never asked).
+bool request_screen_capture_permission(void) {
+    if (@available(macOS 10.15, *)) {
+        return CGRequestScreenCaptureAccess();
+    }
+    return true;
+}
+
+// Open System Settings → Privacy & Security → Screen Recording
+void open_screen_recording_settings(void) {
+    @try {
+        // macOS 13+ (Ventura) and later
+        NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"];
+        [[NSWorkspace sharedWorkspace] openURL:url];
+    } @catch (NSException *e) {
+        NSLog(@"[Reattend] open_screen_recording_settings exception: %@", e);
+    }
+}
+
+// Open System Settings → Privacy & Security → Microphone
+void open_microphone_settings(void) {
+    @try {
+        NSURL *url = [NSURL URLWithString:@"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"];
+        [[NSWorkspace sharedWorkspace] openURL:url];
+    } @catch (NSException *e) {
+        NSLog(@"[Reattend] open_microphone_settings exception: %@", e);
+    }
+}
+
+// Get frontmost (active) application name via NSWorkspace.
+// Returns a malloc'd C string that MUST be freed by the caller.
+// This works correctly for tray/LSUIElement apps (unlike active_win_pos_rs).
+char* get_frontmost_app_name(void) {
+    @try {
+        NSRunningApplication *app = [[NSWorkspace sharedWorkspace] frontmostApplication];
+        if (app) {
+            NSString *name = app.localizedName;
+            if (!name) name = app.bundleIdentifier;
+            if (name && name.length > 0) {
+                return strdup([name UTF8String]);
+            }
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[Reattend] get_frontmost_app_name exception: %@", e);
+    }
+    return NULL;
+}
+
 // Hide from Dock — equivalent to LSUIElement=true but works at runtime (for dev mode)
 void hide_from_dock(void) {
     @try {
@@ -95,5 +153,17 @@ void hide_from_dock(void) {
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
     } @catch (NSException *e) {
         NSLog(@"[Reattend] hide_from_dock exception: %@", e);
+    }
+}
+
+// Show in Dock — switch to Regular activation policy (when main window opens)
+void show_in_dock(void) {
+    @try {
+        NSApplication *app = [NSApplication sharedApplication];
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        // Set process name so dock shows "Reattend" instead of binary name in dev mode
+        [[NSProcessInfo processInfo] setProcessName:@"Reattend"];
+    } @catch (NSException *e) {
+        NSLog(@"[Reattend] show_in_dock exception: %@", e);
     }
 }

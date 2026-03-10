@@ -5,8 +5,34 @@ extern "C" {
     fn elevate_ns_window(ns_window_ptr: *mut std::ffi::c_void);
     fn activate_reattend_app();
     fn hide_from_dock();
+    fn show_in_dock();
     fn simulate_copy();
     fn register_services_provider();
+    fn check_screen_capture_permission() -> bool;
+    fn request_screen_capture_permission() -> bool;
+    fn open_screen_recording_settings();
+    fn open_microphone_settings();
+    fn get_frontmost_app_name() -> *mut std::ffi::c_char;
+}
+
+/// Check if screen recording permission is granted (instant, no prompt).
+pub fn platform_check_screen_permission() -> bool {
+    unsafe { check_screen_capture_permission() }
+}
+
+/// Request screen recording permission (shows system prompt if never asked).
+pub fn platform_request_screen_permission() -> bool {
+    unsafe { request_screen_capture_permission() }
+}
+
+/// Open macOS System Settings to Screen Recording pane.
+pub fn platform_open_screen_settings() {
+    unsafe { open_screen_recording_settings(); }
+}
+
+/// Open macOS System Settings to Microphone pane.
+pub fn platform_open_mic_settings() {
+    unsafe { open_microphone_settings(); }
 }
 
 /// Global app handle for the macOS Services callback
@@ -48,6 +74,11 @@ pub fn platform_hide_from_dock() {
     unsafe { hide_from_dock(); }
 }
 
+/// Show app in Dock (when main window opens — switch to Regular activation policy).
+pub fn platform_show_in_dock() {
+    unsafe { show_in_dock(); }
+}
+
 /// Simulate Cmd+C to copy the current selection.
 pub fn platform_simulate_copy() {
     unsafe { simulate_copy(); }
@@ -71,10 +102,18 @@ pub fn platform_read_clipboard() -> Option<String> {
 }
 
 /// Get the name of the currently active/foreground application.
+/// Uses NSWorkspace via ObjC FFI (reliable for tray/LSUIElement apps).
 pub fn platform_get_active_app_name() -> String {
-    match active_win_pos_rs::get_active_window() {
-        Ok(win) => win.app_name,
-        Err(_) => "Unknown".to_string(),
+    extern "C" { fn free(ptr: *mut std::ffi::c_void); }
+    unsafe {
+        let name_ptr = get_frontmost_app_name();
+        if name_ptr.is_null() {
+            return "Unknown".to_string();
+        }
+        let c_str = std::ffi::CStr::from_ptr(name_ptr);
+        let result = c_str.to_str().unwrap_or("Unknown").to_string();
+        free(name_ptr as *mut std::ffi::c_void);
+        result
     }
 }
 
@@ -87,24 +126,31 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
         .resource_dir()
         .map_err(|e| e.to_string())?;
 
-    // In bundled app: Resources/reattend-capture
-    let bundled_bin = resource_dir.join("reattend-capture");
+    // In bundled app: Tauri copies resources preserving path structure
+    let bundled_bin = resource_dir.join("swift-plugin/.build/release/reattend-capture");
+    // Also check flat path (in case resources config changes)
+    let bundled_flat = resource_dir.join("reattend-capture");
 
-    // In dev: src-tauri/swift-plugin/.build/debug/reattend-capture
-    let dev_bin = std::path::PathBuf::from(
+    // In dev: try release first (prebuild.cjs builds with -c release)
+    let cargo_dir = std::path::PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string()),
-    )
-    .join("swift-plugin")
-    .join(".build")
-    .join("debug")
-    .join("reattend-capture");
+    );
+    let dev_release_bin = cargo_dir.join("swift-plugin/.build/release/reattend-capture");
+    let dev_debug_bin = cargo_dir.join("swift-plugin/.build/debug/reattend-capture");
 
     let bin_path = if bundled_bin.exists() {
         bundled_bin
-    } else if dev_bin.exists() {
-        dev_bin
+    } else if bundled_flat.exists() {
+        bundled_flat
+    } else if dev_release_bin.exists() {
+        dev_release_bin
+    } else if dev_debug_bin.exists() {
+        dev_debug_bin
     } else {
-        return Err("reattend-capture binary not found. Build the Swift plugin first.".to_string());
+        return Err(format!(
+            "reattend-capture binary not found. Searched:\n  {}\n  {}\n  {}\n  {}\nRun: cd src-tauri/swift-plugin && swift build -c release",
+            bundled_bin.display(), bundled_flat.display(), dev_release_bin.display(), dev_debug_bin.display(),
+        ));
     };
 
     let output = tokio::process::Command::new(&bin_path)

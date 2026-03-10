@@ -25,6 +25,20 @@ if (platform === "darwin") {
   execSync("cd src-tauri/swift-plugin && swift build -c release", {
     stdio: "inherit",
   });
+
+  // Sign the Swift binary with Developer ID + hardened runtime + secure timestamp
+  const signingIdentity = conf.bundle?.macOS?.signingIdentity;
+  if (signingIdentity) {
+    const binaryPath = "src-tauri/swift-plugin/.build/release/reattend-capture";
+    const entitlements = "src-tauri/Entitlements.plist";
+    console.log(`[prebuild] Signing reattend-capture with "${signingIdentity}"...`);
+    execSync(
+      `codesign --force --options runtime --timestamp --sign "${signingIdentity}" --entitlements "${entitlements}" "${binaryPath}"`,
+      { stdio: "inherit" }
+    );
+    console.log("[prebuild] reattend-capture signed successfully");
+  }
+
   // Add Swift binary as bundled resource
   conf.bundle.resources = ["swift-plugin/.build/release/reattend-capture"];
 } else {
