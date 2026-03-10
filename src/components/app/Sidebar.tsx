@@ -13,8 +13,11 @@ import {
   PanelLeft,
   Trash2,
   Mic,
+  ArrowUpCircle,
 } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -68,8 +71,9 @@ function groupThreadsByDate(
 }
 
 export function Sidebar() {
-  const { sidebarCollapsed, setSidebarCollapsed, userName, setUserName, userAvatar, setUserAvatar } =
+  const { sidebarCollapsed, setSidebarCollapsed, userName, setUserName, userAvatar, setUserAvatar, updateAvailable } =
     useAppStore();
+  const [updating, setUpdating] = useState(false);
   const { threads, activeThreadId, setActiveThread, deleteThread, loadThreads } =
     useChatStore();
   const navigate = useNavigate();
@@ -418,10 +422,54 @@ export function Sidebar() {
               </Tooltip>
             )}
           </div>
-          {appVersion && !sidebarCollapsed && (
-            <p className="text-[10px] text-muted-foreground/40 text-center pt-1">
-              v{appVersion}
-            </p>
+          {!sidebarCollapsed && (
+            <div className="text-center pt-1">
+              {updateAvailable ? (
+                <button
+                  onClick={async () => {
+                    setUpdating(true);
+                    try {
+                      await invoke("install_update");
+                      await relaunch();
+                    } catch (e) {
+                      console.error("[Updater] Install failed:", e);
+                      setUpdating(false);
+                    }
+                  }}
+                  disabled={updating}
+                  className="inline-flex items-center gap-1 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-200 transition-colors"
+                >
+                  <ArrowUpCircle className="h-3 w-3" />
+                  {updating ? "Updating..." : `Update to v${updateAvailable.version}`}
+                </button>
+              ) : appVersion ? (
+                <p className="text-[10px] text-muted-foreground/40">
+                  v{appVersion}
+                </p>
+              ) : null}
+            </div>
+          )}
+          {sidebarCollapsed && updateAvailable && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={async () => {
+                    setUpdating(true);
+                    try {
+                      await invoke("install_update");
+                      await relaunch();
+                    } catch (e) {
+                      console.error("[Updater] Install failed:", e);
+                      setUpdating(false);
+                    }
+                  }}
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-indigo-600 dark:text-indigo-400 hover:bg-sidebar-accent/50 transition-colors mx-auto"
+                >
+                  <ArrowUpCircle className="h-4 w-4" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right">Update to v{updateAvailable.version}</TooltipContent>
+            </Tooltip>
           )}
         </div>
       </aside>
