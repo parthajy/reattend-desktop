@@ -64,17 +64,19 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
     // Steps 1-4 run in spawn_blocking because xcap types are !Send
     let (base64_image, app_name) = tokio::task::spawn_blocking(|| -> Result<(String, String), String> {
         // Step 1: Capture screenshot via xcap
-        let monitors = xcap::Monitor::all().map_err(|e| format!("Monitor error: {}", e))?;
+        let monitors = xcap::Monitor::all().map_err(|e| format!("Monitor enumerate error: {}", e))?;
+        println!("[Win OCR] Found {} monitors", monitors.len());
         let primary = monitors
             .into_iter()
             .find(|m| m.is_primary().unwrap_or(false))
             .or_else(|| xcap::Monitor::all().ok()?.into_iter().next())
             .ok_or("No monitor found")?;
 
-        let image = primary.capture_image().map_err(|e| format!("Capture error: {}", e))?;
+        let image = primary.capture_image().map_err(|e| format!("Screen capture error: {}", e))?;
 
         // Step 2: Resize to 25% for bandwidth efficiency
         let (w, h) = (image.width(), image.height());
+        println!("[Win OCR] Captured {}x{} screenshot", w, h);
         let resized = image::imageops::resize(
             &image,
             w / 4,
@@ -87,7 +89,9 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
         resized
             .write_to(&mut buf, image::ImageFormat::Jpeg)
             .map_err(|e| format!("JPEG encode error: {}", e))?;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(buf.into_inner());
+        let bytes = buf.into_inner();
+        println!("[Win OCR] JPEG size: {} bytes", bytes.len());
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
 
         // Step 4: Get active app name
         let app_name = platform_get_active_app_name();
@@ -109,8 +113,11 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
     let device_id = db.get_config("device_id").unwrap_or_default();
 
     if token.is_empty() && device_id.is_empty() {
-        return Err("No authentication configured (need API token or device ID)".to_string());
+        return Err("No auth: device_id and auth_token both empty".to_string());
     }
+
+    println!("[Win OCR] POST {}/api/tray/ocr (image: {} chars, device_id: {}, has_token: {})",
+        url, base64_image.len(), if device_id.is_empty() { "none" } else { &device_id[..8] }, !token.is_empty());
 
     // Step 6: Send to server for OCR
     let client = reqwest::Client::new();
@@ -132,11 +139,15 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
     let resp = req.send().await
         .map_err(|e| format!("OCR request failed: {}", e))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("OCR API error: {}", resp.status()));
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("OCR API error {}: {}", status, body));
     }
 
     let mut result: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let text_len = result["text"].as_str().map(|t| t.len()).unwrap_or(0);
+    println!("[Win OCR] Success: {} chars of text from {}", text_len, app_name);
     if result.get("appName").is_none() {
         result["appName"] = serde_json::json!(app_name);
     }

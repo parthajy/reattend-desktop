@@ -1453,10 +1453,12 @@ pub fn run() {
                 .join("com.reattend.desktop")
                 .join("models");
             let _ = std::fs::create_dir_all(&models_dir);
+            println!("[Init] Embedding model cache dir: {:?}", models_dir);
             tauri::async_runtime::spawn_blocking(move || {
+                println!("[Init] Starting embedding model download/load...");
                 match ai::init_local_embedder(models_dir) {
-                    Ok(()) => {}
-                    Err(e) => eprintln!("[Init] Failed to init embedding model: {}", e),
+                    Ok(()) => println!("[Init] Embedding model ready!"),
+                    Err(e) => eprintln!("[Init] FAILED to init embedding model: {}", e),
                 }
             });
 
