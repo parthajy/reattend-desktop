@@ -1127,15 +1127,15 @@ Respond with this EXACT JSON structure:
   "summary": "2-3 sentence summary of key information",
   "tags": ["tag1", "tag2"],
   "entities": [
-    {{"kind": "person", "name": "John Smith"}},
-    {{"kind": "topic", "name": "Q2 campaigns"}}
+    {{"kind": "person", "name": "<real name from text>"}},
+    {{"kind": "topic", "name": "<real topic from text>"}}
   ],
   "confidence": 0.85,
   "why_kept_or_dropped": "Brief reason",
   "due_date": "2026-04-05",
-  "action_items": ["Follow up with John on proposal", "Send Q2 report by Friday"],
-  "decisions": ["Approved new budget allocation"],
-  "key_points": ["Discussed Q2 campaign strategy", "New hire starting next week"]
+  "action_items": ["<real action items from text>"],
+  "decisions": ["<real decisions from text>"],
+  "key_points": ["<real key points from text>"]
 }}
 
 RULES:

@@ -43,10 +43,13 @@ export function Layout() {
     invoke<{ status: string; fail_count: number; success_count: number; has_permission: boolean }>("get_capture_health")
       .then((health) => {
         if (health.status === "broken") {
+          const isWindows = navigator.platform?.toLowerCase().includes("win");
           setCaptureBroken(
-            health.has_permission
-              ? "Screen capture not working. Try toggling Screen Recording permission off and on in System Settings."
-              : "Screen Recording permission not granted. Reattend can't capture your screen."
+            isWindows
+              ? "Screen capture not working. Check your internet connection — Windows uses server-side OCR."
+              : health.has_permission
+                ? "Screen capture not working. Try toggling Screen Recording permission off and on in System Settings."
+                : "Screen Recording permission not granted. Reattend can't capture your screen."
           );
         }
       })
@@ -159,12 +162,14 @@ export function Layout() {
                 {captureBroken}
               </span>
               <div className="flex items-center gap-2 ml-4 shrink-0">
+                {!navigator.platform?.toLowerCase().includes("win") && (
                 <button
                   onClick={() => invoke("open_screen_recording_settings")}
                   className="text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded-md"
                 >
                   Open Settings
                 </button>
+                )}
                 <button
                   onClick={() => setCaptureBroken(null)}
                   className="text-amber-500 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-200"

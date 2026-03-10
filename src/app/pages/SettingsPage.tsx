@@ -605,6 +605,36 @@ export default function SettingsPage() {
           <div className="space-y-4">
             <div className="rounded-lg border bg-card p-4 space-y-1">
               <p className="text-sm font-semibold mb-1">System Permissions</p>
+              {navigator.platform?.toLowerCase().includes("win") ? (
+                <div className="py-4 space-y-3">
+                  <div className="p-4 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 bg-emerald-100 dark:bg-emerald-900/30">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Screen Capture</p>
+                        <p className="text-xs text-muted-foreground">No special permissions needed on Windows. Screen capture works automatically.</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 bg-emerald-100 dark:bg-emerald-900/30">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">Microphone</p>
+                        <p className="text-xs text-muted-foreground">Windows will prompt for microphone access when you start a meeting recording.</p>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Note: Screen text is extracted via server-side OCR. Make sure you're connected to the internet for screen capture to work.
+                  </p>
+                </div>
+              ) : (
+              <>
               <p className="text-xs text-muted-foreground mb-4">
                 Reattend needs these macOS permissions to work. Without them, it can't capture your screen or record meetings.
               </p>
@@ -719,6 +749,8 @@ export default function SettingsPage() {
                   Re-check Permissions
                 </Button>
               </div>
+              </>
+              )}
             </div>
           </div>
         )}

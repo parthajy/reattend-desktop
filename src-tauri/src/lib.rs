@@ -746,16 +746,25 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                     if fail_count == 5 && !CAPTURE_BROKEN_NOTIFIED.load(std::sync::atomic::Ordering::SeqCst) {
                         CAPTURE_BROKEN_NOTIFIED.store(true, std::sync::atomic::Ordering::SeqCst);
                         eprintln!("[Capture] ALERT: {} consecutive OCR failures — screen capture is broken", fail_count);
+                        let msg = if cfg!(target_os = "macos") {
+                            "Screen capture not working. Check Screen Recording permission in System Settings."
+                        } else {
+                            "Screen capture not working. Check your internet connection — Windows uses server-side OCR."
+                        };
                         let _ = app_handle.emit("capture_health", serde_json::json!({
                             "status": "broken",
-                            "message": "Screen capture not working. Check Screen Recording permission in System Settings.",
+                            "message": msg,
                             "fail_count": fail_count
                         }));
-                        // Show macOS notification
+                        let notif_body = if cfg!(target_os = "macos") {
+                            "Screen Recording permission may have been revoked. Click to fix in System Settings."
+                        } else {
+                            "Screen capture is failing. Check your internet connection."
+                        };
                         let _ = app_handle.notification()
                             .builder()
                             .title("Reattend: Screen Capture Stopped")
-                            .body("Screen Recording permission may have been revoked. Click to fix in System Settings.")
+                            .body(notif_body)
                             .show();
                     }
                     // Every 50 failures, re-notify (in case user missed it)
@@ -1603,14 +1612,24 @@ pub fn run() {
                                 eprintln!("[Init] Screen capture test FAILED despite permission granted: {}", e);
                                 CAPTURE_BROKEN_NOTIFIED.store(true, std::sync::atomic::Ordering::SeqCst);
                                 CAPTURE_FAIL_COUNT.store(5, std::sync::atomic::Ordering::SeqCst);
+                                let msg = if cfg!(target_os = "macos") {
+                                    "Screen capture not working. Try toggling Screen Recording permission off and on in System Settings."
+                                } else {
+                                    "Screen capture not working. Check your internet connection — Windows uses server-side OCR."
+                                };
                                 let _ = test_handle.emit("capture_health", serde_json::json!({
                                     "status": "broken",
-                                    "message": "Screen capture not working. Try toggling Screen Recording permission off and on in System Settings."
+                                    "message": msg
                                 }));
+                                let notif_body = if cfg!(target_os = "macos") {
+                                    "Try toggling Screen Recording permission off and on in System Settings, then restart Reattend."
+                                } else {
+                                    "Screen capture is failing. Check your internet connection and restart Reattend."
+                                };
                                 let _ = test_handle.notification()
                                     .builder()
                                     .title("Reattend: Screen Capture Not Working")
-                                    .body("Try toggling Screen Recording permission off and on in System Settings, then restart Reattend.")
+                                    .body(notif_body)
                                     .show();
                             }
                         }
