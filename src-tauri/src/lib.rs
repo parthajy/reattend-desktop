@@ -662,9 +662,35 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
     // Track last popup time for meeting cooldown
     let last_popup_epoch = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
 
+    // Track wall-clock time to detect system sleep/hibernate
+    let mut last_loop_time = std::time::SystemTime::now();
+
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         ticks += 1;
+
+        // Detect system sleep/hibernate: if wall-clock gap > 30s for a 2s sleep, we just woke up
+        let now = std::time::SystemTime::now();
+        if let Ok(elapsed) = now.duration_since(last_loop_time) {
+            if elapsed.as_secs() > 30 {
+                println!("[Capture] System wake detected! Gap was {}s — resetting capture state", elapsed.as_secs());
+                // Reset failure counters so we don't show stale errors
+                CAPTURE_FAIL_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+                CAPTURE_BROKEN_NOTIFIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                // Reset hourly capture counter
+                captures_this_hour = 0;
+                hour_start = std::time::Instant::now();
+                // Clear per-app dedup state (stale after sleep)
+                per_app_text.clear();
+                last_capture_text.clear();
+                // Force embedding cache refresh and re-enable verbose logging
+                embedding_cache_age = u32::MAX;
+                ticks = 1;
+                // Small delay to let network/display settle after wake
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
+        }
+        last_loop_time = now;
 
         let db = match app_handle.try_state::<std::sync::Arc<db::Database>>() {
             Some(d) => d,

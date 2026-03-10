@@ -36,7 +36,24 @@ pub async fn run_worker_loop(
         eprintln!("[Worker] Failed to reset stuck jobs: {}", e);
     }
 
+    // Track wall-clock time to detect system sleep/hibernate
+    let mut last_loop_time = std::time::SystemTime::now();
+
     loop {
+        // Detect system sleep/hibernate: if wall-clock gap is much larger than expected
+        let now = std::time::SystemTime::now();
+        if let Ok(elapsed) = now.duration_since(last_loop_time) {
+            if elapsed.as_secs() > 60 {
+                println!("[Worker] System wake detected! Gap was {}s — resetting stuck jobs", elapsed.as_secs());
+                if let Err(e) = db.reset_stuck_jobs() {
+                    eprintln!("[Worker] Failed to reset stuck jobs after wake: {}", e);
+                }
+                // Brief delay to let system settle
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            }
+        }
+        last_loop_time = std::time::SystemTime::now();
+
         // Check if Ollama is available
         if !client.is_available().await {
             // Ollama not running — wait and retry
