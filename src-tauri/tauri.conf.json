@@ -35,7 +35,10 @@
         "type": "downloadBootstrapper"
       }
     },
-    "category": "public.app-category.productivity"
+    "category": "public.app-category.productivity",
+    "resources": [
+      "swift-plugin/.build/release/reattend-capture"
+    ]
   },
   "plugins": {
     "deep-link": {
