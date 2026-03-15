@@ -1616,7 +1616,8 @@ pub fn run() {
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &ask, &meeting, &meeting_notes, &sep2, &settings, &sep3, &quit])?;
+            let sep4 = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &ask, &sep2, &meeting, &meeting_notes, &sep3, &settings, &sep4, &quit])?;
 
             let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
                 .expect("failed to load tray icon");
