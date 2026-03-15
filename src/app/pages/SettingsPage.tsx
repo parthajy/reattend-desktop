@@ -13,6 +13,8 @@ import {
   checkScreenPermission,
   checkMicPermission,
   openPrivacySettings,
+  getCaptureHealth,
+  retryCaptureTest,
 } from "@/lib/tauri-api";
 import type { JobQueueItem } from "@/types";
 import { open } from "@tauri-apps/plugin-shell";
@@ -39,6 +41,7 @@ import {
   Camera,
   Shield,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -85,7 +88,9 @@ export default function SettingsPage() {
   // Permissions
   const [screenPerm, setScreenPerm] = useState<boolean | null>(null);
   const [micPerm, setMicPerm] = useState<boolean | null>(null);
+  const [captureWorking, setCaptureWorking] = useState<boolean | null>(null);
   const [permLoading, setPermLoading] = useState(false);
+  const [retryingCapture, setRetryingCapture] = useState(false);
   const [appVersion, setAppVersion] = useState("");
 
   // Agent logs
@@ -125,12 +130,16 @@ export default function SettingsPage() {
   const fetchPermissions = async () => {
     setPermLoading(true);
     try {
-      const [screen, mic] = await Promise.all([
+      const [screen, mic, health] = await Promise.all([
         checkScreenPermission().catch(() => false),
         checkMicPermission().catch(() => false),
+        getCaptureHealth().catch(() => null),
       ]);
       setScreenPerm(screen);
       setMicPerm(mic);
+      if (health) {
+        setCaptureWorking(health.status === "healthy");
+      }
     } finally {
       setPermLoading(false);
     }
@@ -605,19 +614,67 @@ export default function SettingsPage() {
           <div className="space-y-4">
             <div className="rounded-lg border bg-card p-4 space-y-1">
               <p className="text-sm font-semibold mb-1">System Permissions</p>
-              {navigator.platform?.toLowerCase().includes("win") ? (
+
+              {permLoading ? (
+                <div className="flex items-center gap-2 py-4 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Checking...</span>
+                </div>
+              ) : navigator.platform?.toLowerCase().includes("win") ? (
+                /* ── Windows ── */
                 <div className="py-4 space-y-3">
-                  <div className="p-4 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
+                  <p className="text-xs text-muted-foreground mb-4">
+                    Windows doesn't require special permissions. Screen text is extracted via server-side OCR (internet required).
+                  </p>
+                  {/* Screen Capture health */}
+                  <div className={cn(
+                    "p-4 rounded-lg border",
+                    captureWorking === false
+                      ? "border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-950/20"
+                      : "border-emerald-200 dark:border-emerald-800/50"
+                  )}>
                     <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 bg-emerald-100 dark:bg-emerald-900/30">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      <div className={cn(
+                        "h-8 w-8 rounded-full flex items-center justify-center shrink-0",
+                        captureWorking === false ? "bg-amber-100 dark:bg-amber-900/30" : "bg-emerald-100 dark:bg-emerald-900/30"
+                      )}>
+                        {captureWorking === false ? (
+                          <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                        ) : (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                        )}
                       </div>
-                      <div>
+                      <div className="flex-1">
                         <p className="text-sm font-medium">Screen Capture</p>
-                        <p className="text-xs text-muted-foreground">No special permissions needed on Windows. Screen capture works automatically.</p>
+                        <p className="text-xs text-muted-foreground">
+                          {captureWorking === false
+                            ? "Not working — check your internet connection"
+                            : captureWorking === true
+                              ? "Working — screen text is being captured"
+                              : "No special permissions needed on Windows"}
+                        </p>
                       </div>
+                      {captureWorking === false && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={retryingCapture}
+                          onClick={async () => {
+                            setRetryingCapture(true);
+                            try {
+                              const result = await retryCaptureTest();
+                              setCaptureWorking(result.status === "healthy");
+                            } catch { setCaptureWorking(false); }
+                            finally { setRetryingCapture(false); }
+                          }}
+                        >
+                          {retryingCapture ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                          Retry
+                        </Button>
+                      )}
                     </div>
                   </div>
+                  {/* Microphone */}
                   <div className="p-4 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
                     <div className="flex items-center gap-3">
                       <div className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 bg-emerald-100 dark:bg-emerald-900/30">
@@ -629,114 +686,148 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Note: Screen text is extracted via server-side OCR. Make sure you're connected to the internet for screen capture to work.
-                  </p>
                 </div>
               ) : (
+              /* ── macOS ── */
               <>
               <p className="text-xs text-muted-foreground mb-4">
                 Reattend needs these macOS permissions to work. Without them, it can't capture your screen or record meetings.
               </p>
 
-              {permLoading ? (
-                <div className="flex items-center gap-2 py-4 justify-center">
-                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                  <span className="text-sm text-muted-foreground">Checking permissions...</span>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {/* Screen Recording */}
-                  <div className={cn(
-                    "p-4 rounded-lg border",
-                    screenPerm ? "border-emerald-200 dark:border-emerald-800/50" : "border-red-200 dark:border-red-800/50 bg-red-50/50 dark:bg-red-950/20"
-                  )}>
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className={cn(
-                        "h-8 w-8 rounded-full flex items-center justify-center shrink-0",
-                        screenPerm ? "bg-emerald-100 dark:bg-emerald-900/30" : "bg-red-100 dark:bg-red-900/30"
-                      )}>
-                        {screenPerm ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                        ) : (
-                          <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">Screen Recording</p>
-                        <p className="text-xs text-muted-foreground">
-                          {screenPerm
-                            ? "Granted — screen text is being captured"
-                            : "Not granted — Reattend can't read your screen"}
-                        </p>
-                      </div>
-                    </div>
-                    {!screenPerm && (
-                      <div className="ml-11 space-y-2">
-                        <div className="text-xs text-muted-foreground space-y-1.5">
-                          <p className="font-medium text-foreground">How to enable:</p>
-                          <p>1. Click the button below to open System Settings</p>
-                          <p>2. Find <span className="font-medium text-foreground">Reattend</span> in the list</p>
-                          <p>3. Toggle it <span className="font-medium text-foreground">ON</span></p>
-                          <p>4. Restart Reattend when prompted</p>
-                        </div>
-                        <Button
-                          size="sm"
-                          onClick={() => openPrivacySettings("screen")}
-                          className="mt-2"
-                        >
-                          Open Screen Recording Settings
-                        </Button>
-                      </div>
-                    )}
-                  </div>
+              <div className="space-y-4">
+                {/* Screen Recording */}
+                {(() => {
+                  // Permission granted AND capture working = green
+                  // Permission granted BUT capture broken = amber (stale permission)
+                  // Permission not granted = red
+                  const isStale = screenPerm && captureWorking === false;
+                  const isOk = screenPerm && captureWorking !== false;
+                  const borderClass = !screenPerm
+                    ? "border-red-200 dark:border-red-800/50 bg-red-50/50 dark:bg-red-950/20"
+                    : isStale
+                      ? "border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-950/20"
+                      : "border-emerald-200 dark:border-emerald-800/50";
+                  const iconBgClass = !screenPerm
+                    ? "bg-red-100 dark:bg-red-900/30"
+                    : isStale
+                      ? "bg-amber-100 dark:bg-amber-900/30"
+                      : "bg-emerald-100 dark:bg-emerald-900/30";
 
-                  {/* Microphone */}
-                  <div className={cn(
-                    "p-4 rounded-lg border",
-                    micPerm ? "border-emerald-200 dark:border-emerald-800/50" : "border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-950/20"
-                  )}>
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className={cn(
-                        "h-8 w-8 rounded-full flex items-center justify-center shrink-0",
-                        micPerm ? "bg-emerald-100 dark:bg-emerald-900/30" : "bg-amber-100 dark:bg-amber-900/30"
-                      )}>
-                        {micPerm ? (
-                          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                        ) : (
-                          <XCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium">Microphone</p>
-                        <p className="text-xs text-muted-foreground">
-                          {micPerm
-                            ? "Granted — meeting recording is available"
-                            : "Not granted — meeting recording won't work"}
-                        </p>
-                      </div>
-                    </div>
-                    {!micPerm && (
-                      <div className="ml-11 space-y-2">
-                        <div className="text-xs text-muted-foreground space-y-1.5">
-                          <p className="font-medium text-foreground">How to enable:</p>
-                          <p>1. Click the button below to open System Settings</p>
-                          <p>2. Find <span className="font-medium text-foreground">Reattend</span> in the list</p>
-                          <p>3. Toggle it <span className="font-medium text-foreground">ON</span></p>
+                  return (
+                    <div className={cn("p-4 rounded-lg border", borderClass)}>
+                      <div className="flex items-center gap-3 mb-2">
+                        <div className={cn("h-8 w-8 rounded-full flex items-center justify-center shrink-0", iconBgClass)}>
+                          {!screenPerm ? (
+                            <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                          ) : isStale ? (
+                            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                          )}
                         </div>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => openPrivacySettings("mic")}
-                          className="mt-2"
-                        >
-                          Open Microphone Settings
-                        </Button>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">Screen Recording</p>
+                          <p className="text-xs text-muted-foreground">
+                            {!screenPerm
+                              ? "Not granted — Reattend can't read your screen"
+                              : isStale
+                                ? "Permission granted but capture isn't working — toggle it off and on in System Settings, then restart"
+                                : isOk
+                                  ? "Granted — screen text is being captured"
+                                  : "Granted — checking capture..."}
+                          </p>
+                        </div>
                       </div>
-                    )}
+                      {!screenPerm && (
+                        <div className="ml-11 space-y-2">
+                          <div className="text-xs text-muted-foreground space-y-1.5">
+                            <p className="font-medium text-foreground">How to enable:</p>
+                            <p>1. Click the button below to open System Settings</p>
+                            <p>2. Find <span className="font-medium text-foreground">Reattend</span> in the list</p>
+                            <p>3. Toggle it <span className="font-medium text-foreground">ON</span></p>
+                            <p>4. Restart Reattend when prompted</p>
+                          </div>
+                          <Button size="sm" onClick={() => openPrivacySettings("screen")} className="mt-2">
+                            Open Screen Recording Settings
+                          </Button>
+                        </div>
+                      )}
+                      {isStale && (
+                        <div className="ml-11 mt-2 flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openPrivacySettings("screen")}
+                          >
+                            Open Settings
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={retryingCapture}
+                            onClick={async () => {
+                              setRetryingCapture(true);
+                              try {
+                                const result = await retryCaptureTest();
+                                setCaptureWorking(result.status === "healthy");
+                              } catch { setCaptureWorking(false); }
+                              finally { setRetryingCapture(false); }
+                            }}
+                          >
+                            {retryingCapture ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}
+                            Retry Capture
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Microphone */}
+                <div className={cn(
+                  "p-4 rounded-lg border",
+                  micPerm ? "border-emerald-200 dark:border-emerald-800/50" : "border-amber-200 dark:border-amber-800/50 bg-amber-50/50 dark:bg-amber-950/20"
+                )}>
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className={cn(
+                      "h-8 w-8 rounded-full flex items-center justify-center shrink-0",
+                      micPerm ? "bg-emerald-100 dark:bg-emerald-900/30" : "bg-amber-100 dark:bg-amber-900/30"
+                    )}>
+                      {micPerm ? (
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      ) : (
+                        <XCircle className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Microphone</p>
+                      <p className="text-xs text-muted-foreground">
+                        {micPerm
+                          ? "Granted — meeting recording is available"
+                          : "Not granted — meeting recording won't work"}
+                      </p>
+                    </div>
                   </div>
+                  {!micPerm && (
+                    <div className="ml-11 space-y-2">
+                      <div className="text-xs text-muted-foreground space-y-1.5">
+                        <p className="font-medium text-foreground">How to enable:</p>
+                        <p>1. Click the button below to open System Settings</p>
+                        <p>2. Find <span className="font-medium text-foreground">Reattend</span> in the list</p>
+                        <p>3. Toggle it <span className="font-medium text-foreground">ON</span></p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openPrivacySettings("mic")}
+                        className="mt-2"
+                      >
+                        Open Microphone Settings
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
 
               <div className="pt-3">
                 <Button

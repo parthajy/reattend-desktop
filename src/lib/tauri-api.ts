@@ -438,5 +438,8 @@ export interface CaptureHealth {
 export const getCaptureHealth = () =>
   invoke<CaptureHealth>("get_capture_health");
 
+export const retryCaptureTest = () =>
+  invoke<CaptureHealth>("retry_capture");
+
 export const openScreenRecordingSettings = () =>
   invoke<void>("open_screen_recording_settings");

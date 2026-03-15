@@ -18,6 +18,7 @@ export function Layout() {
   const setUserName = useAppStore((s) => s.setUserName);
   const [screenPermissionNeeded, setScreenPermissionNeeded] = useState(false);
   const [captureBroken, setCaptureBroken] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'downloading' | 'installing' | 'error'>('idle');
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -45,13 +46,10 @@ export function Layout() {
     invoke<{ status: string; fail_count: number; success_count: number; has_permission: boolean }>("get_capture_health")
       .then((health) => {
         if (health.status === "broken") {
-          const isWindows = navigator.platform?.toLowerCase().includes("win");
           setCaptureBroken(
-            isWindows
-              ? "Screen capture not working. Check your internet connection — Windows uses server-side OCR."
-              : health.has_permission
-                ? "Screen capture not working. Try toggling Screen Recording permission off and on in System Settings."
-                : "Screen Recording permission not granted. Reattend can't capture your screen."
+            health.has_permission
+              ? "Screen capture is not working right now."
+              : "Screen Recording permission not granted. Reattend can't capture your screen."
           );
         }
       })
@@ -73,7 +71,7 @@ export function Layout() {
     });
     const u4 = listen<{ status: string; message: string }>("capture_health", (event) => {
       if (event.payload.status === "broken") {
-        setCaptureBroken(event.payload.message);
+        setCaptureBroken("Screen capture is not working right now.");
       } else if (event.payload.status === "healthy") {
         setCaptureBroken(null);
       }
@@ -186,14 +184,27 @@ export function Layout() {
                 {captureBroken}
               </span>
               <div className="flex items-center gap-2 ml-4 shrink-0">
-                {!navigator.platform?.toLowerCase().includes("win") && (
                 <button
-                  onClick={() => invoke("open_screen_recording_settings")}
-                  className="text-xs font-medium bg-amber-600 hover:bg-amber-700 text-white px-3 py-1 rounded-md"
+                  disabled={retrying}
+                  onClick={async () => {
+                    setRetrying(true);
+                    try {
+                      const result = await invoke<{ status: string }>("retry_capture");
+                      if (result.status === "healthy") {
+                        setCaptureBroken(null);
+                      } else {
+                        setCaptureBroken("Screen capture is still not working.");
+                      }
+                    } catch {
+                      setCaptureBroken("Screen capture is still not working.");
+                    } finally {
+                      setRetrying(false);
+                    }
+                  }}
+                  className="text-xs font-medium bg-amber-600 hover:bg-amber-700 disabled:opacity-70 text-white px-3 py-1 rounded-md flex items-center gap-1"
                 >
-                  Open Settings
+                  {retrying ? <><Loader2 className="h-3 w-3 animate-spin" /> Checking...</> : <><RefreshCw className="h-3 w-3" /> Retry</>}
                 </button>
-                )}
                 <button
                   onClick={() => setCaptureBroken(null)}
                   className="text-amber-500 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-200"

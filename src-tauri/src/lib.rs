@@ -772,21 +772,12 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                     if fail_count == 5 && !CAPTURE_BROKEN_NOTIFIED.load(std::sync::atomic::Ordering::SeqCst) {
                         CAPTURE_BROKEN_NOTIFIED.store(true, std::sync::atomic::Ordering::SeqCst);
                         eprintln!("[Capture] ALERT: {} consecutive OCR failures — screen capture is broken", fail_count);
-                        let msg = if cfg!(target_os = "macos") {
-                            "Screen capture not working. Check Screen Recording permission in System Settings."
-                        } else {
-                            "Screen capture not working. Check your internet connection — Windows uses server-side OCR."
-                        };
                         let _ = app_handle.emit("capture_health", serde_json::json!({
                             "status": "broken",
-                            "message": msg,
+                            "message": "Screen capture is not working right now.",
                             "fail_count": fail_count
                         }));
-                        let notif_body = if cfg!(target_os = "macos") {
-                            "Screen Recording permission may have been revoked. Click to fix in System Settings."
-                        } else {
-                            "Screen capture is failing. Check your internet connection."
-                        };
+                        let notif_body = "Screen capture is not working. Open Reattend to retry.";
                         let _ = app_handle.notification()
                             .builder()
                             .title("Reattend: Screen Capture Stopped")
@@ -1448,6 +1439,7 @@ pub fn run() {
             commands::get_update_info,
             commands::install_update,
             commands::get_capture_health,
+            commands::retry_capture,
             commands::open_screen_recording_settings,
         ])
         .setup(|app| {
@@ -1640,20 +1632,11 @@ pub fn run() {
                                 eprintln!("[Init] Screen capture test FAILED despite permission granted: {}", e);
                                 CAPTURE_BROKEN_NOTIFIED.store(true, std::sync::atomic::Ordering::SeqCst);
                                 CAPTURE_FAIL_COUNT.store(5, std::sync::atomic::Ordering::SeqCst);
-                                let msg = if cfg!(target_os = "macos") {
-                                    "Screen capture not working. Try toggling Screen Recording permission off and on in System Settings."
-                                } else {
-                                    "Screen capture not working. Check your internet connection — Windows uses server-side OCR."
-                                };
                                 let _ = test_handle.emit("capture_health", serde_json::json!({
                                     "status": "broken",
-                                    "message": msg
+                                    "message": "Screen capture is not working right now."
                                 }));
-                                let notif_body = if cfg!(target_os = "macos") {
-                                    "Try toggling Screen Recording permission off and on in System Settings, then restart Reattend."
-                                } else {
-                                    "Screen capture is failing. Check your internet connection and restart Reattend."
-                                };
+                                let notif_body = "Screen capture is not working. Open Reattend to retry.";
                                 let _ = test_handle.notification()
                                     .builder()
                                     .title("Reattend: Screen Capture Not Working")

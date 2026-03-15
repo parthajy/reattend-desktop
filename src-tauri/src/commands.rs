@@ -1249,6 +1249,52 @@ pub async fn open_screen_recording_settings() -> Result<(), String> {
     Ok(())
 }
 
+/// Reset capture failure state and run a test capture to verify it works
+#[tauri::command]
+pub async fn retry_capture(app: tauri::AppHandle) -> Result<CaptureHealth, String> {
+    use std::sync::atomic::Ordering;
+    // Reset failure state
+    crate::CAPTURE_FAIL_COUNT.store(0, Ordering::SeqCst);
+    crate::CAPTURE_BROKEN_NOTIFIED.store(false, Ordering::SeqCst);
+
+    // Run a test capture
+    match crate::platform::platform_capture_screen_ocr(&app).await {
+        Ok(_) => {
+            crate::CAPTURE_SUCCESS_COUNT.fetch_add(1, Ordering::SeqCst);
+            let _ = app.emit("capture_health", serde_json::json!({
+                "status": "healthy",
+                "message": "Screen capture is working"
+            }));
+            Ok(CaptureHealth {
+                status: "healthy".to_string(),
+                fail_count: 0,
+                success_count: crate::CAPTURE_SUCCESS_COUNT.load(Ordering::Relaxed),
+                has_permission: true,
+            })
+        }
+        Err(e) => {
+            crate::CAPTURE_FAIL_COUNT.store(5, Ordering::SeqCst);
+            crate::CAPTURE_BROKEN_NOTIFIED.store(true, Ordering::SeqCst);
+            let has_permission = {
+                #[cfg(target_os = "macos")]
+                { crate::platform::platform_check_screen_permission() }
+                #[cfg(not(target_os = "macos"))]
+                { true }
+            };
+            let _ = app.emit("capture_health", serde_json::json!({
+                "status": "broken",
+                "message": format!("Screen capture failed: {}", e)
+            }));
+            Ok(CaptureHealth {
+                status: "broken".to_string(),
+                fail_count: 5,
+                success_count: crate::CAPTURE_SUCCESS_COUNT.load(Ordering::Relaxed),
+                has_permission,
+            })
+        }
+    }
+}
+
 /// Trigger update download + install from the Rust side
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
