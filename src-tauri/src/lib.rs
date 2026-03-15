@@ -1127,7 +1127,6 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
     let width = 36.0_f64;
     let height = 36.0_f64;
     let margin = 16.0_f64;
-
     let _ = app.run_on_main_thread(move || {
         let app = app_clone;
 
@@ -1135,6 +1134,7 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
             let _ = window.close();
         }
 
+        // Position the small logo at bottom-right; frontend repositions on expand
         let (x, y) = if let Some(monitor) = app.primary_monitor().ok().flatten() {
             let size = monitor.size();
             let scale = monitor.scale_factor();
@@ -1142,7 +1142,7 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
             let screen_h = size.height as f64 / scale;
             (screen_w - width - margin, screen_h - height - margin - 40.0)
         } else {
-            (1200.0, 600.0)
+            (1200.0, 700.0)
         };
 
         // Don't call platform_activate_app() — ambient popup should NOT steal focus

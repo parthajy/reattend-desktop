@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Brain,
@@ -95,23 +95,35 @@ export function AmbientPopup() {
     return () => clearTimeout(t);
   }, [expanded]);
 
-  // Resize window on expand/collapse
+  // Resize and reposition window on expand/collapse
   useEffect(() => {
     const win = getCurrentWindow();
-    if (expanded) {
-      const corrs = data.corrections || [];
-      const srcs = data.sources || [];
-      let h = 100;
-      h += Math.min(Math.ceil(data.insight.length / 45) * 20, 80);
-      if (corrs.length > 0) h += corrs.length * 52 + 8;
-      if (srcs.length > 0) h += 36;
-      h += 32; // footer
-      h = Math.max(h, 160);
-      h = Math.min(h, 420);
-      win.setSize(new LogicalSize(340, h));
-    } else {
-      win.setSize(new LogicalSize(36, 36));
-    }
+    (async () => {
+      if (expanded) {
+        const corrs = data.corrections || [];
+        const srcs = data.sources || [];
+        let h = 100;
+        h += Math.min(Math.ceil(data.insight.length / 45) * 20, 80);
+        if (corrs.length > 0) h += corrs.length * 52 + 8;
+        if (srcs.length > 0) h += 36;
+        h += 32; // footer
+        h = Math.max(h, 160);
+        h = Math.min(h, 420);
+        const w = 340;
+        // Get current position (bottom-right of logo), reposition so expanded card stays on screen
+        const pos = await win.outerPosition();
+        const factor = await win.scaleFactor();
+        const logicalX = pos.x / factor;
+        const logicalY = pos.y / factor;
+        // Move up and left so the bottom-right corner stays roughly where the logo was
+        const newX = logicalX + 36 - w;
+        const newY = logicalY + 36 - h;
+        await win.setPosition(new LogicalPosition(Math.max(newX, 8), Math.max(newY, 8)));
+        await win.setSize(new LogicalSize(w, h));
+      } else {
+        await win.setSize(new LogicalSize(36, 36));
+      }
+    })();
   }, [expanded]);
 
   function handleDismiss() {
