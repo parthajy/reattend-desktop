@@ -32,8 +32,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Strip macOS resources from config
+        run: node -e "const f='src-tauri/tauri.conf.json';const c=JSON.parse(require('fs').readFileSync(f));delete c.bundle.resources;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+
       - name: Build Tauri app
-        run: npx tauri build --config "{\"bundle\":{\"resources\":[]}}"
+        run: npx tauri build
         env:
           RUST_BACKTRACE: 1
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
