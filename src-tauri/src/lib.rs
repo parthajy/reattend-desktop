@@ -1123,10 +1123,9 @@ fn text_similarity(a: &str, b: &str) -> f64 {
 fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
     let app_clone = app.clone();
     let url = url.to_string();
-    let width = 360.0_f64;
-    // Auto-size: taller when corrections are present (detected by URL content)
-    let has_corrections = url.contains("corrections");
-    let height = if has_corrections { 340.0_f64 } else { 260.0_f64 };
+    // Start as a small pill (collapsed state) — frontend expands on click
+    let width = 260.0_f64;
+    let height = 44.0_f64;
     let margin = 16.0_f64;
 
     let _ = app.run_on_main_thread(move || {
