@@ -33,7 +33,7 @@ jobs:
         run: npm install
 
       - name: Build Tauri app
-        run: npx tauri build --config '{"bundle":{"resources":[]}}'
+        run: npx tauri build --config "{\"bundle\":{\"resources\":[]}}"
         env:
           RUST_BACKTRACE: 1
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
