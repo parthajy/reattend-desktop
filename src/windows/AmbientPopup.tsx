@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Brain,
   X,
-  Sparkles,
   Clock,
   Scale,
   Lightbulb,
@@ -17,7 +16,6 @@ import {
   AlertTriangle,
   CheckCircle,
   ArrowRight,
-  ChevronUp,
 } from "lucide-react";
 
 interface AmbientSource {
@@ -63,16 +61,9 @@ const typeColors: Record<string, string> = {
   note: "text-gray-500",
 };
 
-const categoryConfig: Record<string, { icon: React.ComponentType<{ className?: string }>; label: string; accent: string; pillBg: string; pillText: string }> = {
-  contradiction: { icon: AlertTriangle, label: "Contradiction found", accent: "border-amber-200", pillBg: "bg-amber-50", pillText: "text-amber-700" },
-  fact: { icon: AlertTriangle, label: "Fact check", accent: "border-red-200", pillBg: "bg-red-50", pillText: "text-red-700" },
-  context: { icon: Sparkles, label: "Memory match", accent: "border-indigo-200", pillBg: "bg-indigo-50", pillText: "text-indigo-700" },
-  memory: { icon: Brain, label: "Memory match", accent: "border-indigo-200", pillBg: "bg-indigo-50", pillText: "text-indigo-700" },
-};
-
 const correctionColors: Record<string, string> = {
-  fact: "border-red-100 bg-red-50/50",
-  contradiction: "border-amber-100 bg-amber-50/50",
+  fact: "border-red-100 bg-red-50/60",
+  contradiction: "border-amber-100 bg-amber-50/60",
 };
 
 export function AmbientPopup() {
@@ -91,72 +82,66 @@ export function AmbientPopup() {
   const [expanded, setExpanded] = useState(false);
   const [entered, setEntered] = useState(false);
 
-  // Slide-in animation on mount
+  // Slide-in animation
   useEffect(() => {
     const t = setTimeout(() => setEntered(true), 50);
     return () => clearTimeout(t);
   }, []);
 
-  // Auto-dismiss after 12 seconds if not expanded
+  // Auto-dismiss after 10 seconds if not expanded
   useEffect(() => {
     if (expanded) return;
-    const t = setTimeout(() => {
-      if (!expanded) handleDismiss();
-    }, 12000);
+    const t = setTimeout(() => handleDismiss(), 10000);
     return () => clearTimeout(t);
   }, [expanded]);
 
-  // Resize window when expanding/collapsing
+  // Resize window on expand/collapse
   useEffect(() => {
     const win = getCurrentWindow();
     if (expanded) {
       const corrs = data.corrections || [];
       const srcs = data.sources || [];
-      // Calculate height based on content
-      let h = 120; // base: header + insight + footer
-      h += Math.min(data.insight.length / 3, 60); // insight text height estimate
-      if (corrs.length > 0) h += corrs.length * 48 + 12;
-      if (srcs.length > 0) h += 44;
-      h = Math.min(h, 400);
-      win.setSize(new LogicalSize(360, h));
+      let h = 100;
+      h += Math.min(Math.ceil(data.insight.length / 45) * 20, 80);
+      if (corrs.length > 0) h += corrs.length * 52 + 8;
+      if (srcs.length > 0) h += 36;
+      h += 32; // footer
+      h = Math.max(h, 160);
+      h = Math.min(h, 420);
+      win.setSize(new LogicalSize(340, h));
     } else {
-      win.setSize(new LogicalSize(260, 44));
+      win.setSize(new LogicalSize(36, 36));
     }
   }, [expanded]);
 
   function handleDismiss() {
     setDismissed(true);
-    setTimeout(() => getCurrentWindow().close(), 300);
+    setTimeout(() => getCurrentWindow().close(), 250);
   }
 
   async function handleSnooze(minutes: number) {
     await invoke("snooze_ambient", { minutes });
-    setDismissed(true);
-    setTimeout(() => getCurrentWindow().close(), 300);
+    handleDismiss();
   }
 
   if (!data.insight || dismissed) return null;
 
-  const cat = data.category && categoryConfig[data.category]
-    ? categoryConfig[data.category]
-    : categoryConfig.context;
   const corrections = data.corrections || [];
 
-  // ── Collapsed pill ──
+  // ── Collapsed: just the logo ──
   if (!expanded) {
     return (
-      <div className={`h-screen flex items-end justify-end transition-all duration-500 ease-out ${entered ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0"}`}>
+      <div
+        className={`h-screen flex items-end justify-end transition-all duration-500 ease-out ${
+          entered ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0"
+        }`}
+      >
         <button
           onClick={() => setExpanded(true)}
-          className={`flex items-center gap-2 px-3 py-2 rounded-full ${cat.pillBg} border ${cat.accent} shadow-lg hover:shadow-xl transition-all duration-200 hover:scale-[1.02] cursor-pointer group`}
+          className="w-[36px] h-[36px] rounded-full shadow-lg hover:shadow-xl hover:scale-110 transition-all duration-200 cursor-pointer overflow-hidden bg-white border border-gray-200/80"
+          title="Reattend insight"
         >
-          <div className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shrink-0">
-            <Sparkles className="w-3 h-3 text-white" />
-          </div>
-          <span className={`text-[12px] font-medium ${cat.pillText} max-w-[160px] truncate`}>
-            {cat.label}
-          </span>
-          <ChevronUp className={`w-3 h-3 ${cat.pillText} opacity-0 group-hover:opacity-100 transition-opacity`} />
+          <img src="/ambient.svg" alt="" className="w-full h-full" />
         </button>
       </div>
     );
@@ -164,66 +149,60 @@ export function AmbientPopup() {
 
   // ── Expanded card ──
   return (
-    <div className={`h-screen transition-opacity duration-300 ${dismissed ? "opacity-0" : "opacity-100"}`}>
-      <div className={`bg-white/98 backdrop-blur-xl rounded-xl border ${cat.accent} shadow-2xl overflow-hidden`}>
-        {/* Header — minimal */}
-        <div className="flex items-center justify-between px-3.5 py-2 border-b border-gray-100/60">
+    <div className={`h-screen transition-opacity duration-250 ${dismissed ? "opacity-0" : "opacity-100"}`}>
+      <div className="bg-white rounded-xl border border-gray-200/80 shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shrink-0">
-              <Sparkles className="w-3 h-3 text-white" />
-            </div>
-            <span className={`text-[11px] font-semibold ${cat.pillText} tracking-wide`}>
-              {cat.label}
-            </span>
+            <img src="/ambient.svg" alt="" className="w-5 h-5 rounded-full" />
+            <span className="text-[11px] font-medium text-gray-500">Reattend</span>
           </div>
           <button
             onClick={handleDismiss}
-            className="p-1 rounded-md text-gray-300 hover:text-gray-500 hover:bg-gray-100 transition-colors"
+            className="p-0.5 rounded text-gray-300 hover:text-gray-500 transition-colors"
           >
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Insight text */}
-        <div className="px-3.5 py-2.5">
-          <p className="text-[12.5px] text-gray-700 leading-[1.5]">
-            {data.insight}
-          </p>
+        {/* Insight */}
+        <div className="px-3 py-2.5">
+          <p className="text-[13px] text-gray-800 leading-relaxed">{data.insight}</p>
         </div>
 
         {/* Corrections */}
         {corrections.length > 0 && (
-          <div className="px-3.5 pb-2.5">
-            <div className="space-y-1.5">
-              {corrections.slice(0, 3).map((c, i) => (
-                <div
-                  key={i}
-                  className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg border ${correctionColors[c.type] || "border-gray-100 bg-gray-50/50"}`}
-                >
-                  <div className="shrink-0 mt-0.5">
-                    {c.type === "contradiction" ? (
-                      <AlertTriangle className="w-3 h-3 text-amber-500" />
-                    ) : (
-                      <CheckCircle className="w-3 h-3 text-red-400" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5 text-[11px]">
-                      <span className="line-through text-gray-400 truncate max-w-[110px]">{c.original}</span>
-                      <ArrowRight className="w-2.5 h-2.5 text-gray-300 shrink-0" />
-                      <span className="font-medium text-gray-700 truncate max-w-[110px]">{c.suggested}</span>
-                    </div>
-                    <p className="text-[10px] text-gray-400 mt-0.5">{c.reason}</p>
-                  </div>
+          <div className="px-3 pb-2.5 space-y-1.5">
+            {corrections.slice(0, 3).map((c, i) => (
+              <div
+                key={i}
+                className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg border ${
+                  correctionColors[c.type] || "border-gray-100 bg-gray-50/50"
+                }`}
+              >
+                <div className="shrink-0 mt-0.5">
+                  {c.type === "contradiction" ? (
+                    <AlertTriangle className="w-3 h-3 text-amber-500" />
+                  ) : (
+                    <CheckCircle className="w-3 h-3 text-red-400" />
+                  )}
                 </div>
-              ))}
-            </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="line-through text-gray-400 truncate max-w-[100px]">{c.original}</span>
+                    <ArrowRight className="w-2.5 h-2.5 text-gray-300 shrink-0" />
+                    <span className="font-medium text-gray-700 truncate max-w-[100px]">{c.suggested}</span>
+                  </div>
+                  <p className="text-[10px] text-gray-400 mt-0.5">{c.reason}</p>
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
-        {/* Source memories */}
+        {/* Sources */}
         {data.sources && data.sources.length > 0 && (
-          <div className="px-3.5 pb-2">
+          <div className="px-3 pb-2">
             <div className="flex flex-wrap gap-1">
               {data.sources.map((s) => {
                 const Icon = typeIcons[s.type] || Brain;
@@ -231,12 +210,10 @@ export function AmbientPopup() {
                 return (
                   <div
                     key={s.id}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-50 border border-gray-100"
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-50 border border-gray-100"
                   >
                     <Icon className={`w-2.5 h-2.5 ${color} shrink-0`} />
-                    <span className="text-[10px] text-gray-500 truncate max-w-[140px]">
-                      {s.title}
-                    </span>
+                    <span className="text-[10px] text-gray-500 truncate max-w-[120px]">{s.title}</span>
                   </div>
                 );
               })}
@@ -244,26 +221,27 @@ export function AmbientPopup() {
           </div>
         )}
 
-        {/* Footer — snooze & dismiss */}
-        <div className="px-3.5 py-1.5 border-t border-gray-100/60 flex items-center justify-between">
+        {/* Footer */}
+        <div className="px-3 py-1.5 border-t border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-1">
             <Clock className="w-2.5 h-2.5 text-gray-300" />
-            {[{ label: "30m", mins: 30 }, { label: "2h", mins: 120 }, { label: "8h", mins: 480 }].map((s, i) => (
+            {[
+              { label: "30m", mins: 30 },
+              { label: "2h", mins: 120 },
+              { label: "8h", mins: 480 },
+            ].map((s, i) => (
               <span key={s.label} className="flex items-center">
-                {i > 0 && <span className="text-gray-200 text-[9px] mx-0.5">·</span>}
+                {i > 0 && <span className="text-gray-200 text-[9px] mx-0.5">&middot;</span>}
                 <button
                   onClick={() => handleSnooze(s.mins)}
-                  className="text-[10px] text-gray-400 hover:text-indigo-500 transition-colors"
+                  className="text-[10px] text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {s.label}
                 </button>
               </span>
             ))}
           </div>
-          <button
-            onClick={handleDismiss}
-            className="text-[10px] text-gray-400 hover:text-gray-600 transition-colors"
-          >
+          <button onClick={handleDismiss} className="text-[10px] text-gray-400 hover:text-gray-600 transition-colors">
             Dismiss
           </button>
         </div>

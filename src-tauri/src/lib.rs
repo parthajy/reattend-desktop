@@ -1123,9 +1123,9 @@ fn text_similarity(a: &str, b: &str) -> f64 {
 fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
     let app_clone = app.clone();
     let url = url.to_string();
-    // Start as a small pill (collapsed state) — frontend expands on click
-    let width = 260.0_f64;
-    let height = 44.0_f64;
+    // Start as a small logo button (36x36) — frontend expands on click
+    let width = 36.0_f64;
+    let height = 36.0_f64;
     let margin = 16.0_f64;
 
     let _ = app.run_on_main_thread(move || {
