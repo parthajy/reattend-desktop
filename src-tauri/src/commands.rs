@@ -1253,15 +1253,45 @@ pub async fn open_screen_recording_settings() -> Result<(), String> {
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle) -> Result<String, String> {
     use tauri_plugin_updater::UpdaterExt;
-    let updater = app.updater().map_err(|e| format!("Updater error: {}", e))?;
-    let update = updater.check().await.map_err(|e| format!("Check error: {}", e))?;
+    println!("[Updater] install_update called");
+    let updater = app.updater().map_err(|e| {
+        println!("[Updater] Failed to create updater: {}", e);
+        format!("Updater error: {}", e)
+    })?;
+    println!("[Updater] Checking for update...");
+    let update = updater.check().await.map_err(|e| {
+        println!("[Updater] Check failed: {}", e);
+        format!("Check error: {}", e)
+    })?;
     match update {
         Some(u) => {
             let version = u.version.clone();
-            u.download_and_install(|_, _| {}, || {}).await
-                .map_err(|e| format!("Install error: {}", e))?;
+            println!("[Updater] Downloading and installing v{}...", version);
+            let downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let downloaded_clone = downloaded.clone();
+            u.download_and_install(
+                move |chunk, total| {
+                    let prev = downloaded_clone.fetch_add(chunk as u64, std::sync::atomic::Ordering::SeqCst);
+                    let current = prev + chunk as u64;
+                    if let Some(t) = total {
+                        if current % (1024 * 512) < chunk as u64 {
+                            println!("[Updater] Download progress: {:.1}MB / {:.1}MB", current as f64 / 1_048_576.0, t as f64 / 1_048_576.0);
+                        }
+                    }
+                },
+                || {
+                    println!("[Updater] Download complete, installing...");
+                },
+            ).await.map_err(|e| {
+                println!("[Updater] Install failed: {}", e);
+                format!("Install error: {}", e)
+            })?;
+            println!("[Updater] Successfully installed v{}", version);
             Ok(format!("Installed v{}", version))
         }
-        None => Err("No update available".to_string()),
+        None => {
+            println!("[Updater] No update available");
+            Err("No update available".to_string())
+        }
     }
 }

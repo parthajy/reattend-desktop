@@ -7,7 +7,7 @@ import { QuickCaptureModal } from "@/components/app/QuickCaptureModal";
 import { UpgradePrompt } from "@/components/app/UpgradePrompt";
 import { useAppStore } from "@/stores/app-store";
 import { getUsageStats, getConfigValue, openPrivacySettings } from "@/lib/tauri-api";
-import { X, Download, AlertTriangle, RefreshCw } from "lucide-react";
+import { X, Download, AlertTriangle, RefreshCw, Loader2 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 
@@ -19,6 +19,8 @@ export function Layout() {
   const [screenPermissionNeeded, setScreenPermissionNeeded] = useState(false);
   const [captureBroken, setCaptureBroken] = useState<string | null>(null);
   const updateAvailable = useAppStore((s) => s.updateAvailable);
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'downloading' | 'installing' | 'error'>('idle');
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   // Load current auth state and usage on mount
@@ -99,21 +101,43 @@ export function Layout() {
               )}
             </span>
             <div className="flex items-center gap-2 ml-4 shrink-0">
+              {updateError && (
+                <span className="text-xs text-red-600 dark:text-red-400 max-w-[200px] truncate">{updateError}</span>
+              )}
               <button
+                disabled={updateStatus !== 'idle' && updateStatus !== 'error'}
                 onClick={async () => {
+                  setUpdateStatus('downloading');
+                  setUpdateError(null);
                   try {
                     await invoke("install_update");
+                    setUpdateStatus('installing');
                     await relaunch();
-                  } catch (e) {
-                    console.error("[Updater] Install failed:", e);
+                  } catch (e: any) {
+                    const msg = typeof e === 'string' ? e : e?.message || 'Update failed';
+                    console.error("[Updater] Install failed:", msg);
+                    setUpdateStatus('error');
+                    setUpdateError(msg);
                   }
                 }}
-                className="text-xs font-medium bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded-md flex items-center gap-1"
+                className="text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-70 text-white px-3 py-1 rounded-md flex items-center gap-1 whitespace-nowrap"
               >
-                Install &amp; Restart <RefreshCw className="h-3 w-3" />
+                {updateStatus === 'downloading' ? (
+                  <><Loader2 className="h-3 w-3 animate-spin" /> Downloading...</>
+                ) : updateStatus === 'installing' ? (
+                  <><Loader2 className="h-3 w-3 animate-spin" /> Restarting...</>
+                ) : updateStatus === 'error' ? (
+                  <><RefreshCw className="h-3 w-3" /> Retry</>
+                ) : (
+                  <>Install &amp; Restart <RefreshCw className="h-3 w-3" /></>
+                )}
               </button>
               <button
-                onClick={() => useAppStore.getState().setUpdateAvailable(null)}
+                onClick={() => {
+                  useAppStore.getState().setUpdateAvailable(null);
+                  setUpdateStatus('idle');
+                  setUpdateError(null);
+                }}
                 className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200"
               >
                 <X className="h-4 w-4" />

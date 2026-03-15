@@ -1016,7 +1016,7 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                     // Refresh embedding cache every ~60 ticks (~2 min) or on first use
                     if embedding_cache_age > 60 {
                         if let Ok(fresh) = db.get_all_embeddings() {
-                            let mut cache = embedding_cache.blocking_write();
+                            let mut cache = embedding_cache.write().await;
                             *cache = fresh;
                             embedding_cache_age = 0;
                         }

@@ -27,13 +27,13 @@ export function UpgradePrompt() {
             Your free trial has ended
           </p>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Upgrade to Smart for unlimited AI operations, ambient capture, and memory graph.
+            Upgrade to Pro for unlimited AI capture, meeting transcription, semantic search, and more. Or keep using Reattend free as a notetaker.
           </p>
           <button
             onClick={handleAction}
             className="mt-3 px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white text-xs font-medium shadow-sm transition-colors"
           >
-            Upgrade to Smart — $9/mo
+            Upgrade to Pro — $20/mo
           </button>
         </div>
       </div>
