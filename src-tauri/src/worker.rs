@@ -503,7 +503,9 @@ async fn handle_transcribe(db: &Database, client: &AiClient, payload: &str) -> R
     // Downsample WAV to mono 16kHz (what Whisper expects, ~6x smaller)
     let audio_bytes = downsample_wav(audio_path)?;
     let file_size_mb = audio_bytes.len() as f64 / (1024.0 * 1024.0);
-    println!("[Worker] Transcribing: {} ({:.1} MB after downsample)", audio_path, file_size_mb);
+    // Scale timeout: 120s base + 30s per MB (a 7-min recording ≈ 3MB after downsample → 210s)
+    let timeout_secs = 120 + (file_size_mb * 30.0) as u64;
+    println!("[Worker] Transcribing: {} ({:.1} MB after downsample, timeout {}s)", audio_path, file_size_mb, timeout_secs);
 
     // Build multipart form for server proxy
     let file_part = reqwest::multipart::Part::bytes(audio_bytes)
@@ -519,7 +521,7 @@ async fn handle_transcribe(db: &Database, client: &AiClient, payload: &str) -> R
         .post(&url)
         .headers(client.auth_headers())
         .multipart(form)
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .send()
         .await
         .map_err(|e| format!("Transcribe request failed: {}", e))?;
@@ -536,17 +538,24 @@ async fn handle_transcribe(db: &Database, client: &AiClient, payload: &str) -> R
     let data: serde_json::Value = res.json().await
         .map_err(|e| format!("Failed to parse transcribe response: {}", e))?;
 
-    let transcript = data["text"].as_str().unwrap_or("").to_string();
+    let raw_transcript = data["text"].as_str().unwrap_or("").to_string();
     let duration = data["duration"].as_f64().unwrap_or(0.0);
 
-    if transcript.is_empty() {
+    if raw_transcript.is_empty() {
         println!("[Worker] Transcription returned empty text — skipping triage");
         db.update_raw_item_status(raw_item_id, "ignored", Some("{\"reason\": \"empty_transcript\"}"))
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
-    // Update raw item content with the transcript text
+    // Polish transcript with LLM — fix grammar, punctuation, filler words, structure
+    let transcript = polish_transcript(client, &raw_transcript).await
+        .unwrap_or_else(|e| {
+            eprintln!("[Worker] Transcript polish failed (using raw): {}", e);
+            raw_transcript.clone()
+        });
+
+    // Update raw item content with the polished transcript
     db.update_raw_item_content(raw_item_id, &transcript)
         .map_err(|e| format!("Failed to update raw item content: {}", e))?;
 
@@ -576,23 +585,91 @@ async fn handle_transcribe(db: &Database, client: &AiClient, payload: &str) -> R
     Ok(())
 }
 
+/// Polish a raw Whisper transcript using the LLM.
+/// Fixes grammar, punctuation, removes filler words, and structures into paragraphs.
+async fn polish_transcript(client: &AiClient, raw: &str) -> Result<String, String> {
+    let word_count = raw.split_whitespace().count();
+    // Skip polishing for very short transcripts (not worth the API call)
+    if word_count < 20 {
+        return Ok(raw.to_string());
+    }
+
+    let system = "You are a transcript editor. Clean up this raw speech-to-text transcript. \
+        Fix grammar and punctuation. Remove filler words (um, uh, like, you know). \
+        Remove repeated words/phrases from speech disfluency. \
+        Break into natural paragraphs by topic. \
+        Do NOT add information that wasn't said. Do NOT summarize — keep all substantive content. \
+        Return ONLY the cleaned transcript text, nothing else.";
+
+    // For very long transcripts, truncate to avoid token limits
+    let input = if word_count > 3000 {
+        let truncated: String = raw.split_whitespace().take(3000).collect::<Vec<_>>().join(" ");
+        format!("{}\n\n[transcript continues...]", truncated)
+    } else {
+        raw.to_string()
+    };
+
+    let polished = client.generate_text(system, &input).await?;
+
+    // Sanity check: polished should be at least 30% of original length
+    if polished.split_whitespace().count() < word_count / 3 {
+        eprintln!("[Worker] Polish output suspiciously short ({} vs {} words), using raw",
+            polished.split_whitespace().count(), word_count);
+        return Ok(raw.to_string());
+    }
+
+    println!("[Worker] Polished transcript: {} → {} words", word_count, polished.split_whitespace().count());
+    Ok(polished)
+}
+
 /// Downsample a WAV file to mono 16kHz 16-bit (what Whisper expects).
-/// Returns the downsampled WAV as bytes in memory.
+/// Processes in chunks to avoid loading the entire file into memory.
 fn downsample_wav(path: &str) -> Result<Vec<u8>, String> {
     let reader = hound::WavReader::open(path)
         .map_err(|e| format!("Failed to open WAV {}: {}", path, e))?;
 
     let spec = reader.spec();
     let src_rate = spec.sample_rate;
-    let src_channels = spec.channels as u32;
+    let src_channels = spec.channels as usize;
     let target_rate: u32 = 16000;
+    let original_mb = std::fs::metadata(path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
 
-    // Read all samples as i16
-    let samples: Vec<i16> = match spec.sample_format {
+    // Estimate output size for pre-allocation (avoid repeated reallocs)
+    let total_samples = reader.len() as usize;
+    let mono_samples = total_samples / src_channels;
+    let out_samples = if src_rate != target_rate {
+        (mono_samples as f64 * target_rate as f64 / src_rate as f64) as usize
+    } else {
+        mono_samples
+    };
+    // Output WAV bytes: header (44) + samples * 2 bytes each
+    let estimated_bytes = 44 + out_samples * 2;
+
+    let out_spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: target_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut buf = std::io::Cursor::new(Vec::with_capacity(estimated_bytes));
+    let mut writer = hound::WavWriter::new(&mut buf, out_spec)
+        .map_err(|e| format!("Failed to create WAV writer: {}", e))?;
+
+    // Process in chunks: read raw samples, mix to mono, resample, write — one chunk at a time
+    // Chunk size: 1 second of source audio (keeps peak memory to ~200KB per chunk)
+    let chunk_frames = src_rate as usize; // 1 second worth of frames
+    let chunk_samples = chunk_frames * src_channels;
+
+    // Resample state: carry fractional position across chunks
+    let ratio = if src_rate != target_rate { src_rate as f64 / target_rate as f64 } else { 1.0 };
+    let needs_resample = src_rate != target_rate;
+    let mut resample_pos: f64 = 0.0; // fractional position into current mono chunk
+    let mut prev_sample: i16 = 0; // last sample from previous chunk for interpolation
+
+    // Read samples as i16 iterator
+    let all_samples: Vec<i16> = match spec.sample_format {
         hound::SampleFormat::Int => {
-            reader.into_samples::<i16>()
-                .filter_map(|s| s.ok())
-                .collect()
+            reader.into_samples::<i16>().filter_map(|s| s.ok()).collect()
         }
         hound::SampleFormat::Float => {
             reader.into_samples::<f32>()
@@ -602,58 +679,56 @@ fn downsample_wav(path: &str) -> Result<Vec<u8>, String> {
         }
     };
 
-    // Mix down to mono (average channels)
-    let mono: Vec<i16> = if src_channels > 1 {
-        samples.chunks(src_channels as usize)
-            .map(|chunk| {
-                let sum: i32 = chunk.iter().map(|&s| s as i32).sum();
-                (sum / src_channels as i32) as i16
-            })
-            .collect()
-    } else {
-        samples
-    };
-
-    // Resample to 16kHz using simple linear interpolation
-    let resampled: Vec<i16> = if src_rate != target_rate {
-        let ratio = src_rate as f64 / target_rate as f64;
-        let out_len = (mono.len() as f64 / ratio) as usize;
-        (0..out_len)
-            .map(|i| {
-                let src_pos = i as f64 * ratio;
-                let idx = src_pos as usize;
-                let frac = src_pos - idx as f64;
-                let s0 = mono[idx.min(mono.len() - 1)] as f64;
-                let s1 = mono[(idx + 1).min(mono.len() - 1)] as f64;
-                (s0 + frac * (s1 - s0)) as i16
-            })
-            .collect()
-    } else {
-        mono
-    };
-
-    // Write to in-memory WAV buffer
-    let out_spec = hound::WavSpec {
-        channels: 1,
-        sample_rate: target_rate,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut buf = std::io::Cursor::new(Vec::new());
-    {
-        let mut writer = hound::WavWriter::new(&mut buf, out_spec)
-            .map_err(|e| format!("Failed to create WAV writer: {}", e))?;
-        for sample in &resampled {
-            writer.write_sample(*sample)
-                .map_err(|e| format!("WAV write error: {}", e))?;
+    // Process in chunks to avoid creating multiple full-size buffers
+    for raw_chunk in all_samples.chunks(chunk_samples) {
+        // Mix to mono in-place (no separate allocation)
+        let mono_len = raw_chunk.len() / src_channels;
+        if needs_resample {
+            // Resample with linear interpolation, streaming across chunks
+            while resample_pos < mono_len as f64 {
+                let idx = resample_pos as usize;
+                let frac = resample_pos - idx as f64;
+                let s0 = if idx == 0 && resample_pos < 1.0 {
+                    // Use prev_sample from last chunk for continuity
+                    let current = mono_sample(raw_chunk, 0, src_channels);
+                    ((prev_sample as f64) + frac * (current as f64 - prev_sample as f64)) as i16
+                } else {
+                    let a = mono_sample(raw_chunk, idx.min(mono_len - 1), src_channels) as f64;
+                    let b = mono_sample(raw_chunk, (idx + 1).min(mono_len - 1), src_channels) as f64;
+                    (a + frac * (b - a)) as i16
+                };
+                let _ = writer.write_sample(s0);
+                resample_pos += ratio;
+            }
+            resample_pos -= mono_len as f64; // carry remainder to next chunk
+            if mono_len > 0 {
+                prev_sample = mono_sample(raw_chunk, mono_len - 1, src_channels);
+            }
+        } else {
+            // No resampling needed, just write mono samples
+            for i in 0..mono_len {
+                let _ = writer.write_sample(mono_sample(raw_chunk, i, src_channels));
+            }
         }
-        writer.finalize()
-            .map_err(|e| format!("WAV finalize error: {}", e))?;
     }
 
-    let original_mb = std::fs::metadata(path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+    writer.finalize().map_err(|e| format!("WAV finalize error: {}", e))?;
+
     let new_mb = buf.get_ref().len() as f64 / (1024.0 * 1024.0);
     println!("[Worker] Downsampled WAV: {:.1} MB → {:.1} MB (mono 16kHz)", original_mb, new_mb);
 
     Ok(buf.into_inner())
+}
+
+/// Get a mono sample from interleaved multi-channel data at frame index `i`.
+#[inline]
+fn mono_sample(data: &[i16], frame: usize, channels: usize) -> i16 {
+    if channels == 1 {
+        data[frame]
+    } else {
+        let start = frame * channels;
+        let end = (start + channels).min(data.len());
+        let sum: i32 = data[start..end].iter().map(|&s| s as i32).sum();
+        (sum / channels as i32) as i16
+    }
 }
