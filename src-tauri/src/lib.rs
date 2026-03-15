@@ -547,58 +547,6 @@ async fn toggle_meeting(app_handle: tauri::AppHandle) {
     }
 }
 
-/// Save the current text selection to Reattend (local database).
-async fn save_selection(app_handle: tauri::AppHandle) {
-    platform::platform_simulate_copy();
-    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
-
-    let clip_text = match platform::platform_read_clipboard() {
-        Some(t) if t.split_whitespace().count() >= 2 => t,
-        _ => {
-            let _ = app_handle.notification()
-                .builder()
-                .title("Reattend")
-                .body("No text selected. Select some text and try again.")
-                .show();
-            return;
-        }
-    };
-
-    let db = match app_handle.try_state::<std::sync::Arc<db::Database>>() {
-        Some(d) => d,
-        None => return,
-    };
-
-    let meta = serde_json::json!({
-        "capture_type": "selection",
-        "source": "manual_selection",
-    });
-    let preview = if clip_text.len() > 60 {
-        format!("{}...", &clip_text[..57])
-    } else {
-        clip_text.clone()
-    };
-
-    match db.insert_raw_item(&clip_text, "selection", None, Some(&meta.to_string())) {
-        Ok(raw_id) => {
-            let payload = serde_json::json!({ "raw_item_id": raw_id }).to_string();
-            let _ = db.queue_job("triage", &payload);
-            let _ = app_handle.notification()
-                .builder()
-                .title("Saved to Reattend")
-                .body(&preview)
-                .show();
-        }
-        Err(e) => {
-            let _ = app_handle.notification()
-                .builder()
-                .title("Reattend")
-                .body(&format!("Failed to save: {}", e))
-                .show();
-        }
-    }
-}
-
 /// Check if cleaned OCR text has enough signal to be worth triaging.
 /// Prevents sending noise to the LLM and wasting API calls.
 fn is_quality_content(text: &str) -> bool {
@@ -1657,12 +1605,7 @@ pub fn run() {
             )?;
             let quit = MenuItem::with_id(app, "quit", "Quit Reattend", true, None::<&str>)?;
             let capture = MenuItem::with_id(app, "capture", "Quick Capture", true, None::<&str>)?;
-            let save_sel = MenuItem::with_id(
-                app, "save_selection",
-                &format!("Save Selection  {}S", shortcut_prefix),
-                true, None::<&str>
-            )?;
-            let ask = MenuItem::with_id(app, "ask", "Ask AI", true, None::<&str>)?;
+            let ask = MenuItem::with_id(app, "ask", "Ask Memory", true, None::<&str>)?;
             let meeting = MenuItem::with_id(
                 app, "meeting",
                 &format!("Start Meeting  {}M", shortcut_prefix),
@@ -1673,7 +1616,7 @@ pub fn run() {
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &save_sel, &ask, &meeting, &meeting_notes, &sep2, &settings, &sep3, &quit])?;
+            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &ask, &meeting, &meeting_notes, &sep2, &settings, &sep3, &quit])?;
 
             let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
                 .expect("failed to load tray icon");
@@ -1693,14 +1636,8 @@ pub fn run() {
                         "capture" => {
                             create_window(app, "capture", "Quick Capture", "/", 480.0, 320.0);
                         }
-                        "save_selection" => {
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                save_selection(handle).await;
-                            });
-                        }
                         "ask" => {
-                            create_window(app, "ask", "Ask AI", "/", 480.0, 400.0);
+                            create_window(app, "ask", "Ask Memory", "/", 480.0, 400.0);
                         }
                         "meeting" => {
                             let handle = app.clone();
@@ -1721,7 +1658,15 @@ pub fn run() {
                             });
                         }
                         "settings" => {
-                            create_window(app, "settings", "Settings", "/", 400.0, 360.0);
+                            create_main_window(app);
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                                use tauri::Emitter;
+                                let _ = handle.emit("navigate", serde_json::json!({
+                                    "path": "/settings"
+                                }));
+                            });
                         }
                         _ => {}
                     }
@@ -1744,22 +1689,11 @@ pub fn run() {
                 }
             })?;
 
-            let save_shortcut = Shortcut::new(Some(modifier), Code::KeyS);
-            app.global_shortcut().on_shortcut(save_shortcut, {
-                let app_handle = app_handle.clone();
-                move |_app, _shortcut, _event| {
-                    let handle = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        save_selection(handle).await;
-                    });
-                }
-            })?;
-
             let ask_shortcut = Shortcut::new(Some(modifier), Code::KeyA);
             app.global_shortcut().on_shortcut(ask_shortcut, {
                 let app_handle = app_handle.clone();
                 move |_app, _shortcut, _event| {
-                    create_window(&app_handle, "ask", "Ask AI", "/", 480.0, 400.0);
+                    create_window(&app_handle, "ask", "Ask Memory", "/", 480.0, 400.0);
                 }
             })?;
 

@@ -6,7 +6,6 @@ extern "C" {
     fn activate_reattend_app();
     fn hide_from_dock();
     fn show_in_dock();
-    fn simulate_copy();
     fn register_services_provider();
     fn check_screen_capture_permission() -> bool;
     fn request_screen_capture_permission() -> bool;
@@ -77,11 +76,6 @@ pub fn platform_hide_from_dock() {
 /// Show app in Dock (when main window opens — switch to Regular activation policy).
 pub fn platform_show_in_dock() {
     unsafe { show_in_dock(); }
-}
-
-/// Simulate Cmd+C to copy the current selection.
-pub fn platform_simulate_copy() {
-    unsafe { simulate_copy(); }
 }
 
 /// Register macOS Services provider for right-click "Save to Reattend".

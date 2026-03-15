@@ -21,18 +21,6 @@ pub fn platform_show_in_dock() {
     // Windows shows the window in the taskbar automatically
 }
 
-/// Simulate Ctrl+C to copy the current selection.
-pub fn platform_simulate_copy() {
-    use enigo::{Enigo, Keyboard, Settings, Key, Direction};
-    if let Ok(mut enigo) = Enigo::new(&Settings::default()) {
-        let _ = enigo.key(Key::Control, Direction::Press);
-        let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-        let _ = enigo.key(Key::Control, Direction::Release);
-    }
-    // Small delay for the target app to process
-    std::thread::sleep(std::time::Duration::from_millis(50));
-}
-
 /// Register context menu — no-op on Windows MVP.
 pub fn platform_register_context_menu() {
     // No Windows equivalent of macOS Services menu for MVP
