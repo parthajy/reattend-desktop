@@ -7,7 +7,6 @@ import {
   getConfigValue,
   setConfigValue,
   getUsageStats,
-  loginViaBrowser,
   logout as logoutApi,
   connectToken,
   checkScreenPermission,
@@ -17,7 +16,7 @@ import {
   retryCaptureTest,
 } from "@/lib/tauri-api";
 import type { JobQueueItem } from "@/types";
-import { open } from "@tauri-apps/plugin-shell";
+// import { open } from "@tauri-apps/plugin-shell";
 import { useTheme } from "@/hooks/use-theme";
 import { useAppStore } from "@/stores/app-store";
 import {
@@ -472,73 +471,46 @@ export default function SettingsPage() {
               {/* Connect account (anonymous only) */}
               {usageTier === "anonymous" && (
                 <div className="pt-1 space-y-3">
-                  <div>
-                    <p className="text-xs font-medium mb-1">Connect Account</p>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Sign in at reattend.com, copy your token, and paste it below.
+                  <div className="rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20 p-3">
+                    <p className="text-xs font-medium mb-1">Connect to Reattend</p>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Go to <a href="https://www.reattend.com/app/desktop" target="_blank" rel="noopener" className="text-indigo-600 hover:underline font-medium">reattend.com/app/desktop</a>, generate a token, and paste it below.
                     </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={tokenInput}
-                      onChange={(e) => {
-                        setTokenInput(e.target.value);
-                        setConnectError("");
-                      }}
-                      placeholder="Paste your rat_... token"
-                      className="flex-1 px-3 py-2 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20"
-                    />
-                    <Button
-                      size="sm"
-                      onClick={handleConnectToken}
-                      disabled={connecting || !tokenInput.trim()}
-                    >
-                      {connecting ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        "Connect"
-                      )}
-                    </Button>
-                  </div>
-                  {connectError && (
-                    <p className="text-xs text-red-500">{connectError}</p>
-                  )}
-                  <div className="flex items-center gap-2 pt-1">
-                    <span className="text-xs text-muted-foreground">or</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => loginViaBrowser()}
-                    >
-                      <User className="h-3.5 w-3.5 mr-1.5" />
-                      Sign in via browser
-                    </Button>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={tokenInput}
+                        onChange={(e) => {
+                          setTokenInput(e.target.value);
+                          setConnectError("");
+                        }}
+                        placeholder="Paste your token here"
+                        className="flex-1 px-3 py-2 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/20"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={handleConnectToken}
+                        disabled={connecting || !tokenInput.trim()}
+                      >
+                        {connecting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          "Connect"
+                        )}
+                      </Button>
+                    </div>
+                    {connectError && (
+                      <p className="text-xs text-red-500 mt-1">{connectError}</p>
+                    )}
                   </div>
                 </div>
               )}
 
-              {usageTier === "registered" && (
-                <div className="flex items-center justify-between pt-1">
-                  <p className="text-xs text-muted-foreground">
-                    Upgrade for unlimited AI operations.
-                  </p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => open("https://www.reattend.com/app/billing")}
-                  >
-                    <Zap className="h-3.5 w-3.5 mr-1.5" />
-                    Upgrade — $9/mo
-                  </Button>
-                </div>
-              )}
-
-              {/* Logout (only if logged in) */}
+              {/* Disconnect (only if connected) */}
               {usageTier !== "anonymous" && (
                 <div className="flex items-center justify-between border-t pt-3">
                   <p className="text-xs text-muted-foreground">
-                    Signed in as {profileEmail || profileName || "user"}
+                    Connected as {profileEmail || profileName || "user"}
                   </p>
                   <Button
                     size="sm"
@@ -549,7 +521,7 @@ export default function SettingsPage() {
                     {loggingOut ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
                     ) : null}
-                    Sign out
+                    Disconnect
                   </Button>
                 </div>
               )}

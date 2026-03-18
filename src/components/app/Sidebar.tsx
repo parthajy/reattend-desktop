@@ -71,7 +71,7 @@ function groupThreadsByDate(
 }
 
 export function Sidebar() {
-  const { sidebarCollapsed, setSidebarCollapsed, userName, setUserName, userAvatar, setUserAvatar, updateAvailable } =
+  const { sidebarCollapsed, setSidebarCollapsed, userName, setUserName, userAvatar, setUserAvatar, updateAvailable, usageTier } =
     useAppStore();
   const [updating, setUpdating] = useState(false);
   const { threads, activeThreadId, setActiveThread, deleteThread, loadThreads } =
@@ -386,8 +386,12 @@ export function Sidebar() {
                   <span className="text-sm font-semibold truncate">
                     {userName || "Local User"}
                   </span>
-                  <span className="text-[10px] text-muted-foreground truncate">
-                    Local-first AI memory
+                  <span className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
+                    {usageTier !== "anonymous" ? (
+                      <><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" /> Synced to reattend.com</>
+                    ) : (
+                      <><span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" /> Not connected</>
+                    )}
                   </span>
                 </div>
                 <Tooltip>
