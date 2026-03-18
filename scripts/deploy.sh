@@ -60,7 +60,9 @@ echo ""
 echo "[4/8] Creating DMG..."
 ln -sf /Applications "$STAGING/Applications"
 rm -f /tmp/Reattend-deploy.dmg
-hdiutil create -volname "Install Reattend" -srcfolder "$STAGING" -ov -format UDZO /tmp/Reattend-deploy.dmg
+# Use unique volume name to avoid hdiutil conflicts with mounted volumes
+VOLNAME="Reattend-$(date +%s)"
+hdiutil create -volname "$VOLNAME" -srcfolder "$STAGING" -ov -format UDZO /tmp/Reattend-deploy.dmg
 echo "  DMG created"
 
 # Step 5: Notarize DMG
