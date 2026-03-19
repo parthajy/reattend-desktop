@@ -110,14 +110,19 @@ export function AmbientPopup() {
         h = Math.max(h, 160);
         h = Math.min(h, 420);
         const w = 340;
-        // Get current position (bottom-right of logo), reposition so expanded card stays on screen
-        const pos = await win.outerPosition();
-        const factor = await win.scaleFactor();
-        const logicalX = pos.x / factor;
-        const logicalY = pos.y / factor;
-        // Move up and left so the bottom-right corner stays roughly where the logo was
-        const newX = logicalX + 36 - w;
-        const newY = logicalY + 36 - h;
+        const margin = 16;
+        // Re-derive position from screen — same logic as Rust placement,
+        // avoids coordinate space issues when reading outerPosition()
+        const monitors = await import("@tauri-apps/api/window").then(m => m.availableMonitors());
+        const monitor = monitors[0];
+        let screenW = 1440, screenH = 900;
+        if (monitor) {
+          const sf = monitor.scaleFactor;
+          screenW = monitor.size.width / sf;
+          screenH = monitor.size.height / sf;
+        }
+        const newX = screenW - w - margin;
+        const newY = screenH - h - margin - 40;
         await win.setPosition(new LogicalPosition(Math.max(newX, 8), Math.max(newY, 8)));
         await win.setSize(new LogicalSize(w, h));
       } else {

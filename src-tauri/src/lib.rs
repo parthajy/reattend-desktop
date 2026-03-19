@@ -580,8 +580,10 @@ fn is_quality_content(text: &str) -> bool {
 
 /// Max ambient captures per hour to prevent flooding the memory store.
 const MAX_AMBIENT_CAPTURES_PER_HOUR: u32 = 30;
-/// Minimum seconds between ambient popups during meetings
-const MEETING_POPUP_COOLDOWN_SECS: u64 = 45;
+/// Minimum seconds between any ambient popups (global cooldown, outside meetings)
+const AMBIENT_POPUP_COOLDOWN_SECS: u64 = 180; // 3 minutes
+/// Minimum seconds between ambient popups during active meetings
+const MEETING_POPUP_COOLDOWN_SECS: u64 = 120; // 2 minutes
 
 /// Check if a meeting is currently being recorded
 fn is_meeting_active(app: &tauri::AppHandle) -> bool {
@@ -1072,13 +1074,18 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                             synthesis.insight
                         };
 
-                        // Popup cooldown: don't spam during meetings
-                        if is_meeting_mode {
+                        // Global popup cooldown — applies always, stricter outside meetings
+                        {
                             let last = popup_epoch_ref.load(std::sync::atomic::Ordering::Relaxed);
                             let now_epoch = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
-                            if now_epoch - last < MEETING_POPUP_COOLDOWN_SECS as i64 {
-                                println!("[Ambient] Skipping popup — cooldown ({} secs remaining)", MEETING_POPUP_COOLDOWN_SECS as i64 - (now_epoch - last));
+                            let cooldown = if is_meeting_mode {
+                                MEETING_POPUP_COOLDOWN_SECS as i64
+                            } else {
+                                AMBIENT_POPUP_COOLDOWN_SECS as i64
+                            };
+                            if now_epoch - last < cooldown {
+                                println!("[Ambient] Skipping popup — cooldown ({} secs remaining)", cooldown - (now_epoch - last));
                                 return;
                             }
                         }

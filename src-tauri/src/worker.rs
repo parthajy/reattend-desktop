@@ -249,8 +249,9 @@ async fn handle_triage(db: &Database, client: &AiClient, payload: &str, app_hand
             let _ = db.create_notification("todo", &result.title, Some(&body), Some("record"), Some(&record_id));
         }
 
-        // Show meeting result window for transcript records (audio meetings)
-        if source_type == "meeting" || rt == "transcript" {
+        // Show meeting result window only for actual meeting recorder sessions,
+        // not for OCR captures that the triage AI classifies as "transcript"
+        if source_type == "meeting" {
             use tauri::Emitter;
             let _ = app_handle.emit("meeting_result", serde_json::json!({
                 "record_id": record_id,
