@@ -22,7 +22,7 @@ echo "========================================="
 
 # Step 1: Build
 echo ""
-echo "[1/8] Building macOS app..."
+echo "[1/9] Building macOS app..."
 npx tauri build 2>&1 | tail -5 || true
 
 # Verify app was built
@@ -40,7 +40,7 @@ echo "  App built successfully"
 
 # Step 2: Notarize
 echo ""
-echo "[2/8] Notarizing app..."
+echo "[2/9] Notarizing app..."
 STAGING="/tmp/reattend-deploy-staging"
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
@@ -51,13 +51,13 @@ echo "  Notarization accepted"
 
 # Step 3: Staple
 echo ""
-echo "[3/8] Stapling notarization ticket..."
+echo "[3/9] Stapling notarization ticket..."
 xcrun stapler staple "$STAGING/Reattend.app"
 echo "  Stapled"
 
 # Step 4: Create DMG
 echo ""
-echo "[4/8] Creating DMG..."
+echo "[4/9] Creating DMG..."
 ln -sf /Applications "$STAGING/Applications"
 rm -f /tmp/Reattend-deploy.dmg
 # Use unique volume name to avoid hdiutil conflicts with mounted volumes
@@ -67,14 +67,14 @@ echo "  DMG created"
 
 # Step 5: Notarize DMG
 echo ""
-echo "[5/8] Notarizing DMG..."
+echo "[5/9] Notarizing DMG..."
 xcrun notarytool submit /tmp/Reattend-deploy.dmg --keychain-profile "$NOTARY_PROFILE" --wait
 xcrun stapler staple /tmp/Reattend-deploy.dmg
 echo "  DMG notarized and stapled"
 
 # Step 6: Create updater tar.gz and sign
 echo ""
-echo "[6/8] Creating and signing updater package..."
+echo "[6/9] Creating and signing updater package..."
 cd "$STAGING"
 tar czf /tmp/Reattend-updater.app.tar.gz Reattend.app
 cd - > /dev/null
@@ -88,14 +88,14 @@ echo "  Signed"
 
 # Step 7: Upload to server
 echo ""
-echo "[7/8] Uploading to server..."
+echo "[7/9] Uploading to server..."
 scp /tmp/Reattend-deploy.dmg "$SERVER:$DOWNLOAD_DIR/Reattend.dmg"
 scp /tmp/Reattend-updater.app.tar.gz "$SERVER:$UPDATER_DIR/Reattend.app.tar.gz"
 echo "  macOS files uploaded"
 
 # Step 8: Wait for Windows CI and update latest.json
 echo ""
-echo "[8/8] Checking Windows CI..."
+echo "[8/9] Checking Windows CI..."
 
 # Get latest CI run
 LATEST_RUN=$(gh api repos/parthajy/reattend-desktop/actions/runs --jq '.workflow_runs[0] | "\(.id) \(.status) \(.conclusion)"')
@@ -167,6 +167,12 @@ fi
 
 scp /tmp/latest.json "$SERVER:$UPDATER_DIR/latest.json"
 echo "  latest.json updated (v$VERSION)"
+
+# Step 9: Rebuild web app on server
+echo ""
+echo "[9/9] Rebuilding web app on server..."
+ssh "$SERVER" "cd /var/www/reattend && npm run build 2>&1 | tail -5 && pm2 restart reattend && echo 'Web app restarted'"
+echo "  Web app rebuilt and restarted"
 
 # Cleanup
 rm -rf "$STAGING" /tmp/Reattend-notarize.zip /tmp/reattend-win-deploy
