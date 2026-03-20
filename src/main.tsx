@@ -1,6 +1,13 @@
 import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
+import * as Sentry from "@sentry/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+
+Sentry.init({
+  dsn: "https://c2f90817dc04b2ed45eae131ce880519@o4511074431598592.ingest.de.sentry.io/4511074453094480",
+  environment: "production",
+  tracesSampleRate: 0.1,
+});
 import { CaptureWindow } from "./windows/CaptureWindow";
 import { AskWindow } from "./windows/AskWindow";
 import { SettingsWindow } from "./windows/SettingsWindow";
