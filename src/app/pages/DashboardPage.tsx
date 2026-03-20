@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { getDashboardStats, getRecords, getTodayBriefing } from "@/lib/tauri-api";
+import { getDashboardStats, getRecords, getTodayBriefing, getConfigValue } from "@/lib/tauri-api";
 import type { DashboardStats, Record as MemoryRecord, TodayBriefing } from "@/types";
 import {
   Brain,
@@ -152,13 +152,16 @@ export default function DashboardPage() {
   const [recent, setRecent] = useState<MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [askInput, setAskInput] = useState("");
+  const [hasToken, setHasToken] = useState(true);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   useEffect(() => {
-    Promise.all([getDashboardStats(), getRecords({ limit: 8 }), getTodayBriefing()])
-      .then(([s, r, b]) => {
+    Promise.all([getDashboardStats(), getRecords({ limit: 8 }), getTodayBriefing(), getConfigValue("auth_token")])
+      .then(([s, r, b, token]) => {
         setStats(s);
         setRecent(r);
         setBriefing(b);
+        setHasToken(!!token);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -192,6 +195,27 @@ export default function DashboardPage() {
 
   return (
     <div className="p-6 max-w-[1100px] mx-auto space-y-5">
+      {/* Connect banner — shown only when no token is set */}
+      {!hasToken && !bannerDismissed && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-violet-500/10 border border-violet-500/20">
+          <Brain className="w-4 h-4 text-violet-400 shrink-0" />
+          <p className="text-sm text-violet-300 flex-1">
+            Connect your account to sync memories to the web and unlock AI features.
+          </p>
+          <button
+            onClick={() => navigate("/settings")}
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-violet-500 hover:bg-violet-600 text-white transition-colors shrink-0"
+          >
+            Connect <ArrowRight className="w-3 h-3" />
+          </button>
+          <button
+            onClick={() => setBannerDismissed(true)}
+            className="text-violet-400 hover:text-violet-200 transition-colors text-xs shrink-0"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-end justify-between">
         <div>
