@@ -1184,22 +1184,13 @@ pub fn run() {
                 }
             }
 
-            // Initialize local embedding model (downloads ~130MB on first run, then cached)
-            let models_dir = dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("com.reattend.desktop")
-                .join("models");
-            let _ = std::fs::create_dir_all(&models_dir);
-            println!("[Init] Embedding model cache dir: {:?}", models_dir);
-            tauri::async_runtime::spawn_blocking(move || {
-                println!("[Init] Starting embedding model download/load...");
-                match ai::init_local_embedder(models_dir) {
-                    Ok(()) => println!("[Init] Embedding model ready!"),
-                    Err(e) => eprintln!("[Init] FAILED to init embedding model: {}", e),
-                }
-            });
+            // (FastEmbed init removed 2026-05-07 with the thin-client refactor.
+            // The local embedder existed to power on-device semantic search +
+            // ambient memory lookup; both run server-side now via /api/ask
+            // and /api/tray/related. Kicking the 130 MB ONNX download on
+            // first launch was the single biggest install-friction issue —
+            // gone now.)
 
-            let worker_db = database.clone();
             let deep_link_db = database.clone();
             app.manage(database);
 
@@ -1462,24 +1453,13 @@ pub fn run() {
                 passive_capture_loop(bg_handle).await;
             });
 
-            // Start AI worker loop (embeddings are local via fastembed, LLM via server/groq/ollama)
-            let ai_provider = worker_db.get_config("ai_provider").unwrap_or_else(|| "server".to_string());
-            let server_url = worker_db.get_config("server_url")
-                .unwrap_or_else(|| "https://www.reattend.com".to_string());
-            let device_id = worker_db.get_config("device_id").unwrap_or_default();
-            let auth_token = worker_db.get_config("auth_token").unwrap_or_default();
-            let groq_key = worker_db.get_config("groq_api_key").unwrap_or_default();
-            let ollama_url = worker_db.get_config("ollama_url")
-                .unwrap_or_else(|| "http://localhost:11434".to_string());
-            let ollama_model = worker_db.get_config("ollama_model")
-                .unwrap_or_else(|| "llama3.2:3b".to_string());
-            let worker_handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                worker::run_worker_loop(
-                    worker_db, worker_handle, ai_provider, server_url, device_id, auth_token,
-                    groq_key, ollama_url, ollama_model,
-                ).await;
-            });
+            // (Local AI worker loop removed 2026-05-07 with the thin-client
+            // refactor. Triage / embed / link / enrich all run server-side
+            // when /api/tray/capture receives a POST. The desktop's job is
+            // now: capture → POST → display. No background pipeline needed.
+            // worker.rs and ai.rs are kept on disk for one transitional
+            // commit so ambient's existing AiClient call sites still
+            // resolve; followup commit shrinks both to stubs.)
 
             // Check for updates from Rust (works even without main window open)
             let update_handle = app_handle.clone();
