@@ -8,8 +8,10 @@
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
+    <!-- com.apple.security.device.audio-input removed 2026-05-07: no mic
+         recorder anymore, so we don't need microphone access at all.
+         Avoids the "Reattend wants to access your microphone" dialog that
+         scared first-launch users into rejecting the install. -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
 </dict>

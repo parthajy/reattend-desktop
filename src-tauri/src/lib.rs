@@ -11,7 +11,6 @@ pub mod db;
 pub mod commands;
 pub mod ai;
 pub mod worker;
-pub mod audio;
 mod platform;
 
 /// Flag to distinguish intentional quit from window-close
@@ -355,200 +354,13 @@ fn clean_ocr_text(raw: &str) -> String {
     result
 }
 
-/// Toggle meeting recording on/off. Called from tray menu or ⌘⇧M.
-async fn toggle_meeting(app_handle: tauri::AppHandle) {
-    use tauri_plugin_notification::NotificationExt;
-    let meeting_state = match app_handle.try_state::<std::sync::Arc<std::sync::Mutex<audio::MeetingState>>>() {
-        Some(s) => s,
-        None => return,
-    };
+// Audio recorder removed 2026-05-07.
+// The mic-based meeting recorder (formerly `toggle_meeting`) was
+// removed when we repositioned the desktop app as a thin client. The
+// audio.rs module, cpal/hound deps, audio-input entitlement, and
+// /transcripts page all went with it. The 'meeting' record type stays
+// (it's just a text classification) but nothing here records audio.
 
-    let is_recording = {
-        let state = meeting_state.lock().unwrap();
-        state.is_recording
-    };
-
-    if is_recording {
-        // Stop recording
-        let db = match app_handle.try_state::<std::sync::Arc<db::Database>>() {
-            Some(d) => d,
-            None => return,
-        };
-
-        let (recording_id, duration_secs, audio_path) = {
-            let mut state = meeting_state.lock().unwrap();
-            if let Some(flag) = state.stop_flag.take() {
-                flag.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            let duration = state.start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
-            let recording_id = state.recording_id.clone().unwrap_or_default();
-            let audio_path = state.audio_path.clone().unwrap_or_default();
-            state.is_recording = false;
-            state.recording_id = None;
-            state.start_time = None;
-            state.audio_path = None;
-            (recording_id, duration, audio_path)
-        };
-
-        // Wait for WAV finalization
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        let meta = serde_json::json!({
-            "capture_type": "meeting",
-            "recording_id": recording_id,
-            "audio_path": audio_path.to_string_lossy(),
-            "duration_secs": duration_secs,
-        });
-
-        match db.insert_raw_item(
-            &format!("Meeting recording ({} seconds)", duration_secs),
-            "meeting",
-            Some("audio"),
-            Some(&meta.to_string()),
-        ) {
-            Ok(raw_id) => {
-                let payload = serde_json::json!({
-                    "raw_item_id": raw_id,
-                    "audio_path": audio_path.to_string_lossy(),
-                    "recording_id": recording_id,
-                }).to_string();
-                let _ = db.queue_job("transcribe", &payload);
-                println!("[Meeting] Stopped: {}s → transcribe queued", duration_secs);
-            }
-            Err(e) => eprintln!("[Meeting] Failed to save recording: {}", e),
-        }
-
-        // Close indicator window
-        if let Some(win) = app_handle.get_webview_window("meeting-indicator") {
-            let _ = win.close();
-        }
-
-        let _ = app_handle.notification()
-            .builder()
-            .title("Meeting ended")
-            .body(&format!("{}s recorded — transcribing...", duration_secs))
-            .show();
-
-        let _ = app_handle.emit("meeting_stopped", serde_json::json!({
-            "recording_id": recording_id,
-            "duration_secs": duration_secs,
-        }));
-    } else {
-        // Start recording
-        let data_dir = match app_handle.path().app_data_dir() {
-            Ok(d) => d,
-            Err(e) => {
-                eprintln!("[Meeting] No data dir: {}", e);
-                return;
-            }
-        };
-
-        match audio::start_recording(&data_dir) {
-            Ok((recording_id, wav_path, stop_flag)) => {
-                let mut state = meeting_state.lock().unwrap();
-                state.is_recording = true;
-                state.recording_id = Some(recording_id.clone());
-                state.start_time = Some(std::time::Instant::now());
-                state.audio_path = Some(wav_path);
-                state.stop_flag = Some(stop_flag);
-
-                println!("[Meeting] Started recording: {}", recording_id);
-
-                // Open meeting indicator window (top-right near menu bar)
-                {
-                    let ah = app_handle.clone();
-                    let _ = app_handle.run_on_main_thread(move || {
-                        if let Some(win) = ah.get_webview_window("meeting-indicator") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        } else if let Ok(win) = WebviewWindowBuilder::new(
-                            &ah, "meeting-indicator", WebviewUrl::App("/".into()))
-                            .title("Meeting")
-                            .inner_size(220.0, 48.0)
-                            .resizable(false)
-                            .decorations(false)
-                            .always_on_top(true)
-                            .visible(true)
-                            .build()
-                        {
-                            // Position top-right, below menu bar
-                            if let Ok(monitor) = win.current_monitor() {
-                                if let Some(monitor) = monitor {
-                                    let size = monitor.size();
-                                    let scale = monitor.scale_factor();
-                                    let x = (size.width as f64 / scale) - 240.0;
-                                    let _ = win.set_position(tauri::PhysicalPosition::new(
-                                        (x * scale) as i32,
-                                        (32.0 * scale) as i32,
-                                    ));
-                                }
-                            }
-                        }
-                    });
-                }
-
-                let _ = app_handle.notification()
-                    .builder()
-                    .title("Meeting started")
-                    .body("Recording audio — press ⌘⇧M to stop")
-                    .show();
-
-                let _ = app_handle.emit("meeting_started", serde_json::json!({
-                    "recording_id": recording_id,
-                }));
-
-                // Spawn background monitor for auto-stop (silence detection)
-                let ah_auto = app_handle.clone();
-                let stop_monitor = state.stop_flag.as_ref().map(|f| f.clone());
-                drop(state); // release lock before spawning
-                if let Some(flag) = stop_monitor {
-                    std::thread::spawn(move || {
-                        loop {
-                            std::thread::sleep(std::time::Duration::from_secs(5));
-                            // First check if meeting was already stopped by user
-                            if let Some(ms) = ah_auto.try_state::<std::sync::Arc<std::sync::Mutex<audio::MeetingState>>>() {
-                                let s = ms.lock().unwrap();
-                                if !s.is_recording {
-                                    println!("[Meeting] Monitor: recording already stopped, exiting monitor");
-                                    break;
-                                }
-                            }
-                            if flag.load(std::sync::atomic::Ordering::Relaxed) {
-                                // Recording thread auto-stopped due to silence — only stop if still recording
-                                if let Some(ms) = ah_auto.try_state::<std::sync::Arc<std::sync::Mutex<audio::MeetingState>>>() {
-                                    let s = ms.lock().unwrap();
-                                    if !s.is_recording {
-                                        println!("[Meeting] Monitor: auto-stop flag set but already stopped, exiting");
-                                        break;
-                                    }
-                                }
-                                println!("[Meeting] Auto-stop detected — triggering stop");
-                                let rt = tokio::runtime::Builder::new_current_thread()
-                                    .enable_all()
-                                    .build();
-                                if let Ok(rt) = rt {
-                                    rt.block_on(toggle_meeting(ah_auto));
-                                }
-                                break;
-                            }
-                        }
-                    });
-                }
-            }
-            Err(e) => {
-                eprintln!("[Meeting] Failed to start recording: {}", e);
-                let _ = app_handle.notification()
-                    .builder()
-                    .title("Meeting failed")
-                    .body(&e)
-                    .show();
-            }
-        }
-    }
-}
-
-/// Check if cleaned OCR text has enough signal to be worth triaging.
-/// Prevents sending noise to the LLM and wasting API calls.
 fn is_quality_content(text: &str) -> bool {
     let word_count = text.split_whitespace().count();
     // Need at least 8 words of content
@@ -580,17 +392,8 @@ fn is_quality_content(text: &str) -> bool {
 
 /// Max ambient captures per hour to prevent flooding the memory store.
 const MAX_AMBIENT_CAPTURES_PER_HOUR: u32 = 30;
-/// Minimum seconds between any ambient popups (global cooldown, outside meetings)
+/// Minimum seconds between ambient popups
 const AMBIENT_POPUP_COOLDOWN_SECS: u64 = 180; // 3 minutes
-/// Minimum seconds between ambient popups during active meetings
-const MEETING_POPUP_COOLDOWN_SECS: u64 = 120; // 2 minutes
-
-/// Check if a meeting is currently being recorded
-fn is_meeting_active(app: &tauri::AppHandle) -> bool {
-    app.try_state::<std::sync::Arc<std::sync::Mutex<audio::MeetingState>>>()
-        .map(|s| s.lock().unwrap().is_recording)
-        .unwrap_or(false)
-}
 
 /// Background "Passive Second Brain" loop — now stores locally.
 async fn passive_capture_loop(app_handle: tauri::AppHandle) {
@@ -687,10 +490,10 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
         }
 
         // --- Signal 3: OCR screen capture (dynamic interval) ---
-        let in_meeting = is_meeting_active(&app_handle);
-        let ocr_interval: u32 = if in_meeting {
-            4 // Every 8s during meetings (more responsive)
-        } else if is_productive_app(&last_app_name) {
+        // (`in_meeting` accelerated this when the mic recorder was running.
+        // Recorder gone — fall back to productive-app detection only.)
+        let in_meeting: bool = false;
+        let ocr_interval: u32 = if is_productive_app(&last_app_name) {
             10
         } else {
             30
@@ -1079,11 +882,10 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                             let last = popup_epoch_ref.load(std::sync::atomic::Ordering::Relaxed);
                             let now_epoch = std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
-                            let cooldown = if is_meeting_mode {
-                                MEETING_POPUP_COOLDOWN_SECS as i64
-                            } else {
-                                AMBIENT_POPUP_COOLDOWN_SECS as i64
-                            };
+                            // is_meeting_mode used to shorten the cooldown when the
+                            // mic recorder was active. Recorder gone — single cooldown.
+                            let _ = is_meeting_mode;
+                            let cooldown = AMBIENT_POPUP_COOLDOWN_SECS as i64;
                             if now_epoch - last < cooldown {
                                 println!("[Ambient] Skipping popup — cooldown ({} secs remaining)", cooldown - (now_epoch - last));
                                 return;
@@ -1170,46 +972,8 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
     });
 }
 
-/// Show meeting result window after transcription + triage completes.
-fn create_meeting_result_window(app: &tauri::AppHandle, url: &str) {
-    let app_clone = app.clone();
-    let url = url.to_string();
-    let width = 420.0_f64;
-    let height = 480.0_f64;
-
-    let _ = app.run_on_main_thread(move || {
-        let app = app_clone;
-
-        if let Some(window) = app.get_webview_window("meeting-result") {
-            let _ = window.close();
-        }
-
-        let (x, y) = if let Some(monitor) = app.primary_monitor().ok().flatten() {
-            let size = monitor.size();
-            let scale = monitor.scale_factor();
-            let screen_w = size.width as f64 / scale;
-            let screen_h = size.height as f64 / scale;
-            ((screen_w - width) / 2.0, (screen_h - height) / 2.0)
-        } else {
-            (400.0, 200.0)
-        };
-
-        platform::platform_activate_app();
-
-        if let Ok(window) = WebviewWindowBuilder::new(&app, "meeting-result", WebviewUrl::App(url.into()))
-            .title("Meeting Summary — Reattend")
-            .inner_size(width, height)
-            .position(x, y)
-            .resizable(true)
-            .decorations(true)
-            .always_on_top(true)
-            .visible(true)
-            .build()
-        {
-            let _ = window.set_focus();
-        }
-    });
-}
+// (create_meeting_result_window removed with audio recorder strip — only
+// fired after a transcription job, and the transcribe pipeline is gone.)
 
 /// Open the full Reattend app in a main window (local React frontend).
 fn create_main_window(app: &tauri::AppHandle) {
@@ -1386,10 +1150,8 @@ pub fn run() {
             commands::connect_token,
             commands::check_screen_permission,
             commands::open_privacy_settings,
-            commands::start_meeting,
-            commands::stop_meeting,
-            commands::get_meeting_status,
-            commands::check_mic_permission,
+            // (start_meeting / stop_meeting / get_meeting_status /
+            // check_mic_permission removed with the audio recorder strip.)
             commands::get_update_info,
             commands::install_update,
             commands::get_capture_health,
@@ -1438,8 +1200,7 @@ pub fn run() {
             let deep_link_db = database.clone();
             app.manage(database);
 
-            // Meeting mode state
-            app.manage(std::sync::Arc::new(std::sync::Mutex::new(audio::MeetingState::default())));
+            // (Meeting mode state removed with audio recorder strip.)
 
             // Handle deep links (reattend://auth/callback?... or reattend://share/TOKEN)
             let deep_link_handle = app.handle().clone();
@@ -1612,18 +1373,11 @@ pub fn run() {
             let quit = MenuItem::with_id(app, "quit", "Quit Reattend", true, None::<&str>)?;
             let capture = MenuItem::with_id(app, "capture", "Quick Capture", true, None::<&str>)?;
             let ask = MenuItem::with_id(app, "ask", "Ask Memory", true, None::<&str>)?;
-            let meeting = MenuItem::with_id(
-                app, "meeting",
-                &format!("Start Meeting  {}M", shortcut_prefix),
-                true, None::<&str>
-            )?;
-            let meeting_notes = MenuItem::with_id(app, "meeting_notes", "Transcripts", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
-            let sep4 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &ask, &sep2, &meeting, &meeting_notes, &sep3, &settings, &sep4, &quit])?;
+            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &ask, &sep2, &settings, &sep3, &quit])?;
 
             let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
                 .expect("failed to load tray icon");
@@ -1646,24 +1400,9 @@ pub fn run() {
                         "ask" => {
                             create_window(app, "ask", "Ask Memory", "/", 480.0, 400.0);
                         }
-                        "meeting" => {
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                toggle_meeting(handle).await;
-                            });
-                        }
-                        "meeting_notes" => {
-                            // Open main app and navigate to dedicated meetings page
-                            create_main_window(app);
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                use tauri::Emitter;
-                                let _ = handle.emit("navigate", serde_json::json!({
-                                    "path": "/transcripts"
-                                }));
-                            });
-                        }
+                        // ("meeting" + "meeting_notes" tray items removed with the
+                        // audio recorder strip. Meeting recording was a personal-
+                        // product feature we no longer ship.)
                         "settings" => {
                             create_main_window(app);
                             let handle = app.clone();
@@ -1712,16 +1451,7 @@ pub fn run() {
                 }
             })?;
 
-            let meeting_shortcut = Shortcut::new(Some(modifier), Code::KeyM);
-            app.global_shortcut().on_shortcut(meeting_shortcut, {
-                let app_handle = app_handle.clone();
-                move |_app, _shortcut, _event| {
-                    let handle = app_handle.clone();
-                    tauri::async_runtime::spawn(async move {
-                        toggle_meeting(handle).await;
-                    });
-                }
-            })?;
+            // (⌘⇧M meeting toggle removed with the audio recorder strip.)
 
             // Start passive capture loop
             let bg_handle = app_handle.clone();
@@ -1756,18 +1486,8 @@ pub fn run() {
                 check_for_updates_rust(update_handle).await;
             });
 
-            // Listen for meeting result events → spawn result window
-            let result_handle = app_handle.clone();
-            app_handle.listen("meeting_result", move |event| {
-                let payload_str = event.payload();
-                // Validate it's valid JSON before opening window
-                if serde_json::from_str::<serde_json::Value>(payload_str).is_err() {
-                    return;
-                }
-                let encoded = urlencoding::encode(payload_str);
-                let url = format!("/?data={}", encoded);
-                create_meeting_result_window(&result_handle, &url);
-            });
+            // (meeting_result event listener removed — was only fired by the
+            // mic-recorder transcribe path which no longer exists.)
 
             Ok(())
         })

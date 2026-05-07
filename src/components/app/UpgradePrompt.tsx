@@ -27,7 +27,7 @@ export function UpgradePrompt() {
             Your free trial has ended
           </p>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Upgrade to Pro for unlimited AI capture, meeting transcription, semantic search, and more. Or keep using Reattend free as a notetaker.
+            Upgrade to Pro for unlimited AI capture, semantic search, the smart clipboard, and more. Or keep using Reattend free as a notetaker.
           </p>
           <button
             onClick={handleAction}

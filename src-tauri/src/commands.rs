@@ -1,10 +1,9 @@
-use std::sync::{Arc, Mutex, atomic::Ordering};
+use std::sync::{Arc, atomic::Ordering};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
 use crate::db::{self, Database};
 use crate::ai;
-use crate::audio::MeetingState;
 
 // ── Config commands ───────────────────────────────────────────────────────
 
@@ -1033,148 +1032,11 @@ pub async fn open_privacy_settings(setting: String) -> Result<(), String> {
     Ok(())
 }
 
-// ── Meeting Mode ────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize)]
-pub struct StartMeetingResult {
-    pub recording_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct StopMeetingResult {
-    pub recording_id: String,
-    pub duration_secs: u64,
-    pub raw_item_id: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MeetingStatus {
-    pub is_recording: bool,
-    pub recording_id: Option<String>,
-    pub elapsed_secs: Option<u64>,
-}
-
-#[tauri::command]
-pub async fn start_meeting(
-    app: tauri::AppHandle,
-    meeting_state: State<'_, Arc<Mutex<MeetingState>>>,
-    metadata: Option<String>,
-) -> Result<StartMeetingResult, String> {
-    let mut state = meeting_state.lock().map_err(|e| format!("Lock error: {}", e))?;
-    if state.is_recording {
-        return Err("Already recording a meeting".to_string());
-    }
-
-    // Use app data dir for storing WAV files
-    let data_dir = app.path().app_data_dir()
-        .map_err(|e| format!("No data dir: {}", e))?;
-
-    let (recording_id, wav_path, stop_flag) = crate::audio::start_recording(&data_dir)?;
-
-    state.is_recording = true;
-    state.recording_id = Some(recording_id.clone());
-    state.start_time = Some(std::time::Instant::now());
-    state.audio_path = Some(wav_path);
-    state.stop_flag = Some(stop_flag);
-
-    println!("[Meeting] Started recording: {}", recording_id);
-    let _ = app.emit("meeting_started", serde_json::json!({
-        "recording_id": recording_id,
-        "metadata": metadata,
-    }));
-
-    Ok(StartMeetingResult { recording_id })
-}
-
-#[tauri::command]
-pub async fn stop_meeting(
-    app: tauri::AppHandle,
-    db: State<'_, Arc<Database>>,
-    meeting_state: State<'_, Arc<Mutex<MeetingState>>>,
-) -> Result<StopMeetingResult, String> {
-    let (recording_id, duration_secs, audio_path) = {
-        let mut state = meeting_state.lock().map_err(|e| format!("Lock error: {}", e))?;
-        if !state.is_recording {
-            return Err("Not currently recording".to_string());
-        }
-
-        // Signal stop
-        if let Some(flag) = state.stop_flag.take() {
-            flag.store(true, Ordering::Relaxed);
-        }
-
-        let duration = state.start_time
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
-
-        let recording_id = state.recording_id.clone().unwrap_or_default();
-        let audio_path = state.audio_path.clone().unwrap_or_default();
-
-        // Reset state
-        state.is_recording = false;
-        state.recording_id = None;
-        state.start_time = None;
-        state.audio_path = None;
-
-        (recording_id, duration, audio_path)
-    };
-
-    // Small delay for WAV finalization
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-    // Insert raw item for the recording
-    let meta = serde_json::json!({
-        "capture_type": "meeting",
-        "recording_id": recording_id,
-        "audio_path": audio_path.to_string_lossy(),
-        "duration_secs": duration_secs,
-    });
-
-    let raw_id = db.insert_raw_item(
-        &format!("Meeting recording ({} seconds)", duration_secs),
-        "meeting",
-        Some("audio"),
-        Some(&meta.to_string()),
-    ).map_err(|e| format!("Failed to insert raw item: {}", e))?;
-
-    // Queue transcription job
-    let payload = serde_json::json!({
-        "raw_item_id": raw_id,
-        "audio_path": audio_path.to_string_lossy(),
-        "recording_id": recording_id,
-    }).to_string();
-    db.queue_job("transcribe", &payload).map_err(|e| format!("Failed to queue transcribe job: {}", e))?;
-
-    println!("[Meeting] Stopped recording: {} ({}s) → raw_item {}", recording_id, duration_secs, raw_id);
-    let _ = app.emit("meeting_stopped", serde_json::json!({
-        "recording_id": recording_id,
-        "duration_secs": duration_secs,
-        "raw_item_id": raw_id,
-    }));
-
-    Ok(StopMeetingResult {
-        recording_id,
-        duration_secs,
-        raw_item_id: raw_id,
-    })
-}
-
-#[tauri::command]
-pub async fn get_meeting_status(
-    meeting_state: State<'_, Arc<Mutex<MeetingState>>>,
-) -> Result<MeetingStatus, String> {
-    let state = meeting_state.lock().map_err(|e| format!("Lock error: {}", e))?;
-    Ok(MeetingStatus {
-        is_recording: state.is_recording,
-        recording_id: state.recording_id.clone(),
-        elapsed_secs: state.start_time.map(|t| t.elapsed().as_secs()),
-    })
-}
-
-#[tauri::command]
-pub async fn check_mic_permission() -> Result<bool, String> {
-    Ok(crate::audio::check_mic_available())
-}
+// (Meeting Mode commands removed 2026-05-07 with the audio recorder strip.
+// start_meeting / stop_meeting / get_meeting_status / check_mic_permission
+// all gone, along with the StartMeetingResult / StopMeetingResult /
+// MeetingStatus structs and the audio.rs module they imported MeetingState
+// from. The 'meeting' record type still exists for text-based notes.)
 
 // ── Update commands ──────────────────────────────────────────────────────
 

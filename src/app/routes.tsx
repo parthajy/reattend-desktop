@@ -15,7 +15,7 @@ const ProjectsPage = lazy(() => import("./pages/ProjectsPage"));
 const ProjectDetailPage = lazy(() => import("./pages/ProjectDetailPage"));
 const BoardPage = lazy(() => import("./pages/BoardPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
-const MeetingsPage = lazy(() => import("./pages/MeetingsPage"));
+// (MeetingsPage removed with the audio recorder strip 2026-05-07.)
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 
 function PageLoader() {
@@ -47,7 +47,7 @@ export function AppRoutes() {
           <Route index element={<ChatPage />} />
           <Route path="explore" element={<DashboardPage />} />
           <Route path="inbox" element={<InboxPage />} />
-          <Route path="transcripts" element={<MeetingsPage />} />
+          {/* (transcripts route removed with the audio recorder strip.) */}
           <Route path="memories" element={<MemoriesPage />} />
           <Route path="memories/:id" element={<MemoryDetailPage />} />
           <Route path="projects" element={<ProjectsPage />} />

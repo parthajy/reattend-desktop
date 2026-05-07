@@ -12,8 +12,8 @@ import { CaptureWindow } from "./windows/CaptureWindow";
 import { AskWindow } from "./windows/AskWindow";
 import { SettingsWindow } from "./windows/SettingsWindow";
 import { AmbientPopup } from "./windows/AmbientPopup";
-import { MeetingIndicator } from "./windows/MeetingIndicator";
-import { MeetingResult } from "./windows/MeetingResult";
+// (MeetingIndicator + MeetingResult windows removed with the audio
+// recorder strip — they were only opened by the mic recorder pipeline.)
 import "./styles.css";
 
 // Lazy-load the full app — keeps popup windows lightweight
@@ -34,10 +34,10 @@ function Root() {
       return <SettingsWindow />;
     case "ambient":
       return <AmbientPopup />;
-    case "meeting-indicator":
-      return <MeetingIndicator />;
-    case "meeting-result":
-      return <MeetingResult />;
+    // (meeting-indicator + meeting-result window cases removed with the
+    // audio recorder strip — those windows were only opened by the mic
+    // recorder. Labels still ever delivered will fall through to <MainApp />,
+    // which is harmless.)
     case "main":
     default:
       return (

@@ -10,7 +10,7 @@ import {
   logout as logoutApi,
   connectToken,
   checkScreenPermission,
-  checkMicPermission,
+  // (checkMicPermission removed with the audio recorder strip 2026-05-07.)
   openPrivacySettings,
   getCaptureHealth,
   retryCaptureTest,
@@ -129,13 +129,14 @@ export default function SettingsPage() {
   const fetchPermissions = async () => {
     setPermLoading(true);
     try {
-      const [screen, mic, health] = await Promise.all([
+      const [screen, health] = await Promise.all([
         checkScreenPermission().catch(() => false),
-        checkMicPermission().catch(() => false),
         getCaptureHealth().catch(() => null),
       ]);
       setScreenPerm(screen);
-      setMicPerm(mic);
+      // (Mic permission check removed with the audio recorder strip — we
+      // no longer request microphone access.)
+      setMicPerm(false);
       if (health) {
         setCaptureWorking(health.status === "healthy");
       }

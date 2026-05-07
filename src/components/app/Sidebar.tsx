@@ -36,7 +36,7 @@ const navItems = [
   { to: "/explore", icon: Compass, label: "Explore" },
   { to: "/projects", icon: FolderKanban, label: "Projects", hasPlus: true },
   { to: "/memories", icon: Brain, label: "Memories", hasPlus: true },
-  { to: "/transcripts", icon: Mic, label: "Transcripts" },
+  // (Transcripts nav item removed with the audio recorder strip.)
   { to: "/board", icon: LayoutGrid, label: "Board" },
 ];
 
@@ -100,8 +100,15 @@ export function Sidebar() {
   };
 
   const handleNewChat = () => {
-    // Clear active thread so ChatPage shows empty state
-    useChatStore.setState({ activeThreadId: null, messages: [] });
+    useChatStore.setState({
+      activeThreadId: null,
+      messages: [],
+      isStreaming: false,
+      isThinking: false,
+      streamingContent: '',
+      followUpSuggestions: [],
+      lastResponseMissing: false,
+    });
     navigate("/");
   };
 

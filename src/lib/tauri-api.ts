@@ -323,35 +323,9 @@ export const checkScreenPermission = () =>
 export const openPrivacySettings = (setting: "screen" | "mic") =>
   invoke<void>("open_privacy_settings", { setting });
 
-// ── Meeting Mode ────────────────────────────────────────────────────
-
-export interface StartMeetingResult {
-  recording_id: string;
-}
-
-export interface StopMeetingResult {
-  recording_id: string;
-  duration_secs: number;
-  raw_item_id: string;
-}
-
-export interface MeetingStatus {
-  is_recording: boolean;
-  recording_id: string | null;
-  elapsed_secs: number | null;
-}
-
-export const startMeeting = (metadata?: string) =>
-  invoke<StartMeetingResult>("start_meeting", { metadata: metadata ?? null });
-
-export const stopMeeting = () =>
-  invoke<StopMeetingResult>("stop_meeting");
-
-export const getMeetingStatus = () =>
-  invoke<MeetingStatus>("get_meeting_status");
-
-export const checkMicPermission = () =>
-  invoke<boolean>("check_mic_permission");
+// (Meeting Mode bindings removed 2026-05-07 with the audio recorder strip.
+// Backend commands start_meeting / stop_meeting / get_meeting_status /
+// check_mic_permission no longer exist.)
 
 // ── Sharing ─────────────────────────────────────────────────────────
 
