@@ -19,7 +19,7 @@ let cachedDeviceId: string | null = null;
 async function getServerUrl(): Promise<string> {
   if (cachedServerUrl) return cachedServerUrl;
   const url = await getConfigValue("server_url");
-  cachedServerUrl = (url || "https://www.reattend.com").replace(/\/+$/, "");
+  cachedServerUrl = (url || "https://reattend.com").replace(/\/+$/, "");
   return cachedServerUrl;
 }
 

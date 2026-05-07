@@ -295,7 +295,7 @@ export async function getAuthState(): Promise<AuthState> {
 
 export async function loginViaBrowser(): Promise<void> {
   const { open } = await import("@tauri-apps/plugin-shell");
-  await open("https://www.reattend.com/login/desktop");
+  await open("https://reattend.com/login/desktop");
 }
 
 export async function logout(): Promise<void> {
@@ -362,7 +362,7 @@ export async function sendShareEmail(data: {
   shareUrl: string;
   senderName?: string;
 }): Promise<void> {
-  const serverUrl = await getConfigValue("server_url") || "https://www.reattend.com";
+  const serverUrl = await getConfigValue("server_url") || "https://reattend.com";
   const deviceId = await getConfigValue("device_id") || "";
   const authToken = await getConfigValue("auth_token") || "";
 
@@ -395,7 +395,7 @@ export async function createShareLink(data: {
   meta?: { [key: string]: unknown };
   entities?: { kind: string; name: string }[];
 }): Promise<ShareResult> {
-  const serverUrl = await getConfigValue("server_url") || "https://www.reattend.com";
+  const serverUrl = await getConfigValue("server_url") || "https://reattend.com";
   const deviceId = await getConfigValue("device_id") || "";
   const authToken = await getConfigValue("auth_token") || "";
 

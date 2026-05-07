@@ -49,7 +49,7 @@ pub async fn set_config_value(db: State<'_, Arc<Database>>, key: String, value: 
 #[tauri::command]
 pub async fn get_usage_stats(db: State<'_, Arc<Database>>) -> Result<serde_json::Value, String> {
     let server_url = db.get_config("server_url")
-        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+        .unwrap_or_else(|| "https://reattend.com".to_string());
     let device_id = db.get_config("device_id").unwrap_or_default();
     let auth_token = db.get_config("auth_token").unwrap_or_default();
 
@@ -92,7 +92,7 @@ pub async fn connect_token(db: State<'_, Arc<Database>>, token: String) -> Resul
     }
 
     let server_url = db.get_config("server_url")
-        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+        .unwrap_or_else(|| "https://reattend.com".to_string());
     let device_id = db.get_config("device_id").unwrap_or_default();
 
     let client = reqwest::Client::new();
@@ -177,7 +177,7 @@ pub async fn set_active_context(
     org_id: Option<String>,
 ) -> Result<ActiveContext, String> {
     let server_url = db.get_config("server_url")
-        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+        .unwrap_or_else(|| "https://reattend.com".to_string());
     let auth_token = db.get_config("auth_token").unwrap_or_default();
 
     if context != "personal" && context != "org" {
@@ -228,7 +228,7 @@ fn make_ai_client(db: &Database) -> ai::AiClient {
     // Default: route through server proxy (no API keys on client)
     if provider == "server" {
         let server_url = db.get_config("server_url")
-            .unwrap_or_else(|| "https://www.reattend.com".to_string());
+            .unwrap_or_else(|| "https://reattend.com".to_string());
         let device_id = db.get_config("device_id").unwrap_or_default();
         let auth_token = db.get_config("auth_token").unwrap_or_default();
         return ai::AiClient::new_server(&server_url, &device_id, &auth_token);
@@ -459,7 +459,7 @@ pub async fn capture_text(
     // rejects, we queue locally in pending_capture_queue and the worker
     // retries on the next online check.
     let server_url = db.get_config("server_url")
-        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+        .unwrap_or_else(|| "https://reattend.com".to_string());
     let token = db.get_config("auth_token").unwrap_or_default();
     if token.is_empty() {
         return Err("Not signed in. Open Settings and connect your token.".to_string());

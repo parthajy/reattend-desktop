@@ -8,7 +8,7 @@ export function UpgradePrompt() {
   if (!showUpgradePrompt) return null;
 
   const handleAction = () => {
-    open("https://www.reattend.com/app/billing");
+    open("https://reattend.com/app/billing");
     setShowUpgradePrompt(false);
   };
 

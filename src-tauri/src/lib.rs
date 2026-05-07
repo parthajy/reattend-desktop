@@ -656,7 +656,7 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
 
                                 let ai_provider = w_db.get_config("ai_provider").unwrap_or_else(|| "server".to_string());
                                 let client = if ai_provider == "server" {
-                                    let server_url = w_db.get_config("server_url").unwrap_or_else(|| "https://www.reattend.com".to_string());
+                                    let server_url = w_db.get_config("server_url").unwrap_or_else(|| "https://reattend.com".to_string());
                                     let device_id = w_db.get_config("device_id").unwrap_or_default();
                                     let auth_token = w_db.get_config("auth_token").unwrap_or_default();
                                     ai::AiClient::new_server(&server_url, &device_id, &auth_token)
@@ -833,7 +833,7 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                         let ai_provider = recall_db.get_config("ai_provider").unwrap_or_else(|| "server".to_string());
                         let client = if ai_provider == "server" {
                             let server_url = recall_db.get_config("server_url")
-                                .unwrap_or_else(|| "https://www.reattend.com".to_string());
+                                .unwrap_or_else(|| "https://reattend.com".to_string());
                             let device_id = recall_db.get_config("device_id").unwrap_or_default();
                             let auth_token = recall_db.get_config("auth_token").unwrap_or_default();
                             ai::AiClient::new_server(&server_url, &device_id, &auth_token)
@@ -1171,16 +1171,25 @@ pub fn run() {
             if database.get_config("device_id").is_none() {
                 let device_id = uuid::Uuid::new_v4().to_string();
                 let _ = database.set_config("device_id", &device_id);
-                let _ = database.set_config("server_url", "https://www.reattend.com");
+                let _ = database.set_config("server_url", "https://reattend.com");
                 let _ = database.set_config("ai_provider", "server");
                 println!("[Init] Generated device_id: {}", device_id);
             }
 
-            // Migrate: fix bare domain → www (301 redirects break POST requests)
+            // Migrate: www.reattend.com → bare reattend.com.
+            //
+            // The previous migration (now reversed) flipped bare → www to
+            // dodge a 301 redirect that broke POST bodies. That 301 is gone
+            // from current nginx, AND the production Let's Encrypt cert
+            // only covers reattend.com + enterprise.reattend.com — not
+            // www. So as soon as the old migration ran, the desktop got
+            // "certificate for this server is invalid" on every API call.
+            // This reverse is idempotent: runs once per user on next
+            // launch, no-op afterwards.
             if let Some(url) = database.get_config("server_url") {
-                if url == "https://reattend.com" {
-                    let _ = database.set_config("server_url", "https://www.reattend.com");
-                    println!("[Init] Migrated server_url to www.reattend.com");
+                if url == "https://reattend.com" || url == "https://reattend.com/" {
+                    let _ = database.set_config("server_url", "https://reattend.com");
+                    println!("[Init] Migrated server_url back to bare reattend.com (cert doesn't cover www)");
                 }
             }
 
@@ -1235,7 +1244,7 @@ pub fn run() {
                         let db = share_link_db.clone();
                         let handle = deep_link_handle.clone();
                         let server_url = db.get_config("server_url")
-                            .unwrap_or_else(|| "https://www.reattend.com".to_string());
+                            .unwrap_or_else(|| "https://reattend.com".to_string());
 
                         std::thread::spawn(move || {
                             let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {

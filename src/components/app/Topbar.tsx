@@ -58,7 +58,7 @@ export function Topbar() {
         try {
           const { getVersion } = await import("@tauri-apps/api/app");
           const currentVersion = await getVersion();
-          const res = await fetch("https://www.reattend.com/data/updater/latest.json");
+          const res = await fetch("https://reattend.com/data/updater/latest.json");
           const manifest: { version: string } = await res.json();
           if (manifest.version && manifest.version !== currentVersion) {
             setUpdateVersion(manifest.version);
@@ -162,7 +162,7 @@ export function Topbar() {
                   } else {
                     // No updater object — fallback to DMG download
                     const { open } = await import("@tauri-apps/plugin-shell");
-                    await open("https://www.reattend.com/download/Reattend.dmg");
+                    await open("https://reattend.com/download/Reattend.dmg");
                     setInstalling(false);
                     setUpdateStatus("");
                   }
@@ -170,7 +170,7 @@ export function Topbar() {
                   console.error("[Updater] Install failed:", e);
                   // Fallback to DMG on any error
                   const { open } = await import("@tauri-apps/plugin-shell");
-                  await open("https://www.reattend.com/download/Reattend.dmg");
+                  await open("https://reattend.com/download/Reattend.dmg");
                   setInstalling(false);
                   setUpdateStatus("");
                 }

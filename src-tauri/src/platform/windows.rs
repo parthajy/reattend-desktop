@@ -96,7 +96,7 @@ pub async fn platform_capture_screen_ocr(app_handle: &tauri::AppHandle) -> Resul
         .try_state::<std::sync::Arc<crate::db::Database>>()
         .ok_or("Database not initialized")?;
     let url = db.get_config("server_url")
-        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+        .unwrap_or_else(|| "https://reattend.com".to_string());
     let token = db.get_config("auth_token").unwrap_or_default();
     let device_id = db.get_config("device_id").unwrap_or_default();
 
