@@ -19,8 +19,12 @@ interface AppState {
   captureProjectId: string | null;
   captureProjectName: string | null;
 
-  // Usage / Metering
-  usageTier: "anonymous" | "registered" | "smart";
+  // Usage / Metering. Tier values: "free" | "professional" | "enterprise"
+  // (matches the new server). Old "anonymous" / "registered" / "smart"
+  // values still appear in stale UI that gets removed in Phase 1d when
+  // we rip out the duplicate full-app pages — kept in the union so
+  // those existing comparisons keep compiling until that cleanup.
+  usageTier: "free" | "professional" | "enterprise" | "anonymous" | "registered" | "smart";
   usageRemaining: number | "unlimited";
   showUpgradePrompt: boolean;
 
@@ -41,7 +45,7 @@ interface AppState {
   setCommandOpen: (open: boolean) => void;
   setCurrentThreadId: (id: string | null) => void;
   setNotificationsOpen: (open: boolean) => void;
-  setUsageTier: (tier: "anonymous" | "registered" | "smart") => void;
+  setUsageTier: (tier: "free" | "professional" | "enterprise" | "anonymous" | "registered" | "smart") => void;
   setUsageRemaining: (remaining: number | "unlimited") => void;
   setShowUpgradePrompt: (show: boolean) => void;
   setCaptureProject: (id: string | null, name?: string | null) => void;

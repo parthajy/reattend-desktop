@@ -74,7 +74,16 @@ pub async fn get_usage_stats(db: State<'_, Arc<Database>>) -> Result<serde_json:
 }
 
 /// Validate a pasted API token against the server and save it if valid.
-/// Returns the user info (email, name, tier) on success.
+///
+/// Validates against /api/tray/me (the canonical "tell me about this
+/// token" endpoint, intentionally NOT gated by requireExtensionAccess so
+/// it can return upgrade-prompt info to Free users). Refuses to save the
+/// token if the user's plan doesn't include desktop/extension access —
+/// every other tray endpoint would 402, and the desktop would silently
+/// be useless. Better to fail at connect time with a clear message.
+///
+/// Also caches the active context (Personal vs. Org) so the topbar
+/// switcher seeds correctly without an extra round-trip on launch.
 #[tauri::command]
 pub async fn connect_token(db: State<'_, Arc<Database>>, token: String) -> Result<serde_json::Value, String> {
     let token = token.trim().to_string();
@@ -86,9 +95,8 @@ pub async fn connect_token(db: State<'_, Arc<Database>>, token: String) -> Resul
         .unwrap_or_else(|| "https://www.reattend.com".to_string());
     let device_id = db.get_config("device_id").unwrap_or_default();
 
-    // Validate by calling usage endpoint with the token
     let client = reqwest::Client::new();
-    let res = client.get(format!("{}/api/tray/proxy/usage", server_url))
+    let res = client.get(format!("{}/api/tray/me", server_url))
         .header("X-Device-Id", &device_id)
         .header("Authorization", format!("Bearer {}", token))
         .timeout(std::time::Duration::from_secs(10))
@@ -100,20 +108,117 @@ pub async fn connect_token(db: State<'_, Arc<Database>>, token: String) -> Resul
         return Err("Token is invalid or expired. Please generate a new one.".to_string());
     }
 
-    let usage: serde_json::Value = res.json().await
+    let me: serde_json::Value = res.json().await
         .map_err(|e| format!("Invalid response: {}", e))?;
 
-    // Token is valid — save it
-    db.set_config("auth_token", &token).map_err(|e| e.to_string())?;
+    // Pro+ gate: refuse to save the token for plans without extension/
+    // desktop access. /api/tray/me ships { extensionAccess: bool,
+    // upgradeUrl: string|null } for exactly this check.
+    let extension_access = me.get("extensionAccess").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !extension_access {
+        let upgrade_url = me.get("upgradeUrl").and_then(|v| v.as_str())
+            .unwrap_or("https://reattend.com/pricing");
+        return Err(format!(
+            "The Reattend desktop app needs a Professional or Enterprise plan. Upgrade at {} and generate a new token.",
+            upgrade_url,
+        ));
+    }
 
-    // Extract tier info
-    let tier = usage.get("tier").and_then(|v| v.as_str()).unwrap_or("registered");
+    db.set_config("auth_token", &token).map_err(|e| e.to_string())?;
+    db.set_config("user_email", me.get("email").and_then(|v| v.as_str()).unwrap_or(""))
+        .map_err(|e| e.to_string())?;
+    db.set_config("user_name", me.get("name").and_then(|v| v.as_str()).unwrap_or(""))
+        .map_err(|e| e.to_string())?;
+
+    let tier = me.get("tier").and_then(|v| v.as_str()).unwrap_or("free");
+    db.set_config("tier", tier).map_err(|e| e.to_string())?;
+
+    // Seed the active context cache from the server. Empty string = Personal.
+    let active_org_id = me.get("activeContext")
+        .and_then(|c| c.get("orgId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    db.set_config("active_context_org_id", active_org_id).map_err(|e| e.to_string())?;
 
     Ok(serde_json::json!({
         "tier": tier,
-        "used": usage.get("used"),
-        "limit": usage.get("limit"),
+        "email": me.get("email"),
+        "name": me.get("name"),
+        "extensionAccess": extension_access,
+        "activeContext": me.get("activeContext"),
     }))
+}
+
+/// Active context (Personal vs. an org) that the topbar switcher reads.
+/// Cached locally so launch is instant; written through to the server via
+/// /api/tray/active-context so web/extension/desktop stay in sync.
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ActiveContext {
+    pub context: String,           // "personal" | "org"
+    #[serde(rename = "orgId")]
+    pub org_id: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_active_context(db: State<'_, Arc<Database>>) -> Result<ActiveContext, String> {
+    let raw = db.get_config("active_context_org_id").unwrap_or_default();
+    if raw.is_empty() {
+        Ok(ActiveContext { context: "personal".to_string(), org_id: None })
+    } else {
+        Ok(ActiveContext { context: "org".to_string(), org_id: Some(raw) })
+    }
+}
+
+#[tauri::command]
+pub async fn set_active_context(
+    db: State<'_, Arc<Database>>,
+    context: String,
+    org_id: Option<String>,
+) -> Result<ActiveContext, String> {
+    let server_url = db.get_config("server_url")
+        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+    let auth_token = db.get_config("auth_token").unwrap_or_default();
+
+    if context != "personal" && context != "org" {
+        return Err("context must be 'personal' or 'org'".to_string());
+    }
+    if context == "org" && org_id.as_deref().unwrap_or("").is_empty() {
+        return Err("orgId is required when context is 'org'".to_string());
+    }
+
+    // Write to server first (it validates org membership). Cache locally
+    // only after the server confirms — keeps the local cache from
+    // disagreeing with the server-of-truth.
+    let body = serde_json::json!({
+        "context": context,
+        "orgId": org_id,
+    });
+    let client = reqwest::Client::new();
+    let res = client.post(format!("{}/api/tray/active-context", server_url))
+        .header("Authorization", format!("Bearer {}", auth_token))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .map_err(|e| format!("Could not reach server: {}", e))?;
+
+    if !res.status().is_success() {
+        let status = res.status();
+        let err_text = res.text().await.unwrap_or_default();
+        return Err(format!("Server rejected context switch ({}): {}", status, err_text));
+    }
+
+    let local_value = if context == "org" {
+        org_id.clone().unwrap_or_default()
+    } else {
+        String::new()
+    };
+    db.set_config("active_context_org_id", &local_value)
+        .map_err(|e| e.to_string())?;
+
+    Ok(ActiveContext { context, org_id })
 }
 
 /// Helper: create AiClient from current config (for LLM calls only — embeddings are local)

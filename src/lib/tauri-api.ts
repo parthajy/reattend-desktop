@@ -307,13 +307,34 @@ export async function logout(): Promise<void> {
 }
 
 export interface ConnectTokenResult {
-  tier: "anonymous" | "registered" | "smart";
-  used: number;
-  limit: number | "unlimited";
+  // Subscription tier — drives feature gates in the UI. Solo Free can't
+  // even reach this point (connect_token now refuses Free tokens) but
+  // we still type the union for completeness.
+  tier: "free" | "professional" | "enterprise";
+  email?: string;
+  name?: string;
+  extensionAccess: boolean;
+  activeContext: ActiveContext | null;
+}
+
+export interface ActiveContext {
+  context: "personal" | "org";
+  orgId: string | null;
 }
 
 export const connectToken = (token: string) =>
   invoke<ConnectTokenResult>("connect_token", { token });
+
+// Read the cached active context (Personal / Org). Cheap — no network.
+// Use this everywhere the UI needs to know which scope is active.
+export const getActiveContext = () =>
+  invoke<ActiveContext>("get_active_context");
+
+// Persist the active context. Writes through to the server (validates
+// org membership) and updates the local cache. Returns the new context
+// on success.
+export const setActiveContext = (context: "personal" | "org", orgId: string | null) =>
+  invoke<ActiveContext>("set_active_context", { context, orgId });
 
 // ── Screen Permission ───────────────────────────────────────────────────
 

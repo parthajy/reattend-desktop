@@ -1148,6 +1148,8 @@ pub fn run() {
             commands::set_config_value,
             commands::get_usage_stats,
             commands::connect_token,
+            commands::get_active_context,
+            commands::set_active_context,
             commands::check_screen_permission,
             commands::open_privacy_settings,
             // (start_meeting / stop_meeting / get_meeting_status /
