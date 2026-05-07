@@ -11,6 +11,7 @@ pub mod db;
 pub mod commands;
 pub mod ai;
 pub mod worker;
+pub mod api;
 mod platform;
 
 /// Flag to distinguish intentional quit from window-close

@@ -453,14 +453,37 @@ pub async fn capture_text(
     source: String,
     metadata: Option<String>,
 ) -> Result<String, String> {
-    let raw_id = db.insert_raw_item(&text, &source, None, metadata.as_deref())
-        .map_err(|e| e.to_string())?;
+    // Thin server proxy. The desktop is no longer the source of truth for
+    // memories — every capture POSTs to /api/tray/capture and the server
+    // runs triage / embeddings / linking. If we're offline or the server
+    // rejects, we queue locally in pending_capture_queue and the worker
+    // retries on the next online check.
+    let server_url = db.get_config("server_url")
+        .unwrap_or_else(|| "https://www.reattend.com".to_string());
+    let token = db.get_config("auth_token").unwrap_or_default();
+    if token.is_empty() {
+        return Err("Not signed in. Open Settings and connect your token.".to_string());
+    }
 
-    // Queue triage job
-    let payload = serde_json::json!({ "raw_item_id": raw_id }).to_string();
-    db.queue_job("triage", &payload).map_err(|e| e.to_string())?;
+    let metadata_json: Option<serde_json::Value> = metadata
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
 
-    Ok(raw_id)
+    match crate::api::capture(&server_url, &token, &text, &source, metadata_json.clone()).await {
+        Ok(server_id) => Ok(server_id),
+        Err(network_err) => {
+            // Best-effort offline buffer. If the queue insert also fails,
+            // surface the original network error — that's the actionable one.
+            let queued = db.queue_pending_capture(&text, &source, metadata.as_deref());
+            match queued {
+                Ok(local_id) => {
+                    println!("[capture] Server unreachable ({}), queued offline as {}", network_err, local_id);
+                    Ok(format!("offline:{}", local_id))
+                }
+                Err(_) => Err(network_err),
+            }
+        }
+    }
 }
 
 // ── Ambient snooze ────────────────────────────────────────────────────────

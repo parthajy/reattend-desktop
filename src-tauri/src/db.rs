@@ -291,6 +291,11 @@ impl Database {
             conn.execute("INSERT INTO _migrations (version) VALUES (2)", [])?;
         }
 
+        if current_version < 3 {
+            conn.execute_batch(MIGRATION_V3)?;
+            conn.execute("INSERT INTO _migrations (version) VALUES (3)", [])?;
+        }
+
         Ok(())
     }
 
@@ -1047,6 +1052,27 @@ impl Database {
         Ok(id)
     }
 
+    /// Offline-capture buffer. When /api/tray/capture is unreachable
+    /// (network failure or server down), the capture path drops the
+    /// content here. The drainer (in worker.rs / lib.rs) retries
+    /// every N seconds when online and removes rows on success.
+    pub fn queue_pending_capture(
+        &self,
+        text: &str,
+        source: &str,
+        metadata: Option<&str>,
+    ) -> SqlResult<String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO pending_capture_queue (id, text, source, metadata, created_at, attempt_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            params![id, text, source, metadata, now],
+        )?;
+        Ok(id)
+    }
+
     pub fn get_next_job(&self) -> SqlResult<Option<JobQueueItem>> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
@@ -1759,4 +1785,52 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_notif_status ON notifications(status);
+";
+
+// MIGRATION_V3 — added 2026-05-07 with the thin-client refactor.
+//
+// pending_capture_queue: offline buffer for /api/tray/capture POSTs that
+// failed to reach the server. The Rust drainer retries these on the next
+// online check. Without this, every offline capture would be lost.
+//
+// clipboard_history: local-only memory of recent clipboard items. Never
+// leaves the device unless the user explicitly saves an entry. This is
+// the foundation for the smart-clipboard chip (Phase 2): source-context
+// capture, snippets that learn, and the weekly receipt all read from
+// this table. Bounded — old rows get pruned (oldest 50% beyond cap).
+//
+// vault_entries: encrypted local-only entries. Biometric-gated in the UI;
+// stored ciphertext-only here. Never synced to the server.
+const MIGRATION_V3: &str = "
+CREATE TABLE IF NOT EXISTS pending_capture_queue (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL,
+    metadata TEXT,
+    created_at TEXT NOT NULL,
+    last_error TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pcq_created ON pending_capture_queue(created_at);
+
+CREATE TABLE IF NOT EXISTS clipboard_history (
+    id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    source_app TEXT,
+    source_url TEXT,
+    source_title TEXT,
+    captured_at TEXT NOT NULL,
+    saved_to_server INTEGER NOT NULL DEFAULT 0,
+    server_record_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_clip_captured ON clipboard_history(captured_at);
+
+CREATE TABLE IF NOT EXISTS vault_entries (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    last_accessed_at TEXT
+);
 ";
