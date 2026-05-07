@@ -5,16 +5,17 @@ import {
   Search,
   LayoutGrid,
   Settings,
-  FolderKanban,
   Plus,
   MessageSquare,
   Compass,
   PanelLeftClose,
   PanelLeft,
   Trash2,
-  Mic,
   ArrowUpCircle,
+  Inbox as InboxIcon,
+  ExternalLink,
 } from "lucide-react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -32,12 +33,21 @@ import { useAppStore } from "@/stores/app-store";
 import { useChatStore } from "@/stores/chat-store";
 import { getConfigValue } from "@/lib/tauri-api";
 
-const navItems = [
-  { to: "/explore", icon: Compass, label: "Explore" },
-  { to: "/projects", icon: FolderKanban, label: "Projects", hasPlus: true },
-  { to: "/memories", icon: Brain, label: "Memories", hasPlus: true },
-  // (Transcripts nav item removed with the audio recorder strip.)
-  { to: "/board", icon: LayoutGrid, label: "Board" },
+// Two flavors of nav items:
+//   - in-app pages the desktop actually renders (`to`)
+//   - "open in browser" items that deep-link to reattend.com/app/* via
+//     the OS default browser (`external`). The full memory views live on
+//     the web — desktop is a thin client for capture, ask, and ambient.
+type NavItem =
+  | { kind: "internal"; to: string; icon: any; label: string; hasPlus?: boolean }
+  | { kind: "external"; href: string; icon: any; label: string };
+
+const navItems: NavItem[] = [
+  { kind: "internal", to: "/inbox", icon: InboxIcon, label: "Recent captures" },
+  { kind: "external", href: "https://reattend.com/app/memories", icon: Brain, label: "Memories" },
+  { kind: "external", href: "https://reattend.com/app/decisions", icon: MessageSquare, label: "Decisions" },
+  { kind: "external", href: "https://reattend.com/app/landscape", icon: LayoutGrid, label: "Landscape" },
+  { kind: "external", href: "https://reattend.com/app", icon: Compass, label: "Open Reattend" },
 ];
 
 function groupThreadsByDate(
@@ -237,55 +247,63 @@ export function Sidebar() {
           )}
         </div>
 
-        {/* Navigation */}
+        {/* Navigation. Two kinds of items:
+            - internal: react-router NavLink to an in-app page (Inbox).
+            - external: button that opens the URL in the user's default
+              browser via Tauri's shell plugin. Marked with a small
+              ExternalLink icon so the user knows it'll leave the app. */}
         <nav className={cn("px-2 py-2 flex flex-col gap-0.5")}>
           {navItems.map((item) => {
-            const active = isActive(item.to);
-            const link = (
-              <div key={item.to} className="relative group">
-                <NavLink
-                  to={item.to}
-                  className={cn(
-                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
-                    sidebarCollapsed && "justify-center px-2"
-                  )}
-                >
-                  <item.icon
-                    className={cn(
-                      "h-4 w-4 shrink-0",
-                      active && "text-primary"
-                    )}
-                  />
-                  {!sidebarCollapsed && <span>{item.label}</span>}
-                </NavLink>
-                {/* Inline + icon for Memories and Projects */}
-                {item.hasPlus && !sidebarCollapsed && (
-                  <button
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      navigate(item.to);
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-sidebar-foreground/30 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 opacity-0 group-hover:opacity-100 transition-all"
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                  </button>
+            const key = item.kind === "internal" ? item.to : item.href;
+            const active = item.kind === "internal" ? isActive(item.to) : false;
+
+            const link = item.kind === "internal" ? (
+              <NavLink
+                to={item.to}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                  sidebarCollapsed && "justify-center px-2"
                 )}
-              </div>
+              >
+                <item.icon
+                  className={cn("h-4 w-4 shrink-0", active && "text-primary")}
+                />
+                {!sidebarCollapsed && <span>{item.label}</span>}
+              </NavLink>
+            ) : (
+              <button
+                type="button"
+                onClick={() => { openExternal(item.href).catch(() => { /* silent */ }); }}
+                className={cn(
+                  "w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors text-left",
+                  "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+                  sidebarCollapsed && "justify-center px-2"
+                )}
+              >
+                <item.icon className="h-4 w-4 shrink-0" />
+                {!sidebarCollapsed && (
+                  <>
+                    <span className="flex-1">{item.label}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0 text-sidebar-foreground/30" />
+                  </>
+                )}
+              </button>
             );
 
             if (sidebarCollapsed) {
               return (
-                <Tooltip key={item.to}>
-                  <TooltipTrigger asChild>{link}</TooltipTrigger>
-                  <TooltipContent side="right">{item.label}</TooltipContent>
+                <Tooltip key={key}>
+                  <TooltipTrigger asChild><div>{link}</div></TooltipTrigger>
+                  <TooltipContent side="right">
+                    {item.label}{item.kind === "external" ? " — opens in browser" : ""}
+                  </TooltipContent>
                 </Tooltip>
               );
             }
-            return link;
+            return <div key={key}>{link}</div>;
           })}
         </nav>
 
