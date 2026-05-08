@@ -776,20 +776,18 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                 cleaned.clone()
             };
 
-            // Capture: store locally → queue triage
-            {
-                let meta = serde_json::json!({
-                    "capture_type": "screen",
-                    "app_name": &app_name,
-                });
-                if let Ok(raw_id) = db.insert_raw_item(&capture_text, "tray_ocr", None, Some(&meta.to_string())) {
-                    let payload = serde_json::json!({ "raw_item_id": raw_id }).to_string();
-                    let _ = db.queue_job("triage", &payload);
-                    captures_this_hour += 1;
-                    CAPTURE_SUCCESS_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    last_capture_text.insert(app_name.clone(), cleaned.clone());
-                    println!("[Capture] Stored screen capture #{} from {} ({} words)", captures_this_hour, app_name, capture_text.split_whitespace().count());
-                }
+            // OCR'd screen text feeds the in-memory ambient analyzer below
+            // (semantic recall + writing assist) — we deliberately do NOT
+            // create a memory row from it. The user gets a memory only when
+            // they explicitly clip / capture / type — not for every window
+            // they look at. The hourly counter still ticks for rate-limit
+            // and dedup bookkeeping.
+            captures_this_hour += 1;
+            CAPTURE_SUCCESS_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            last_capture_text.insert(app_name.clone(), cleaned.clone());
+            if verbose {
+                println!("[Capture] OCR #{} from {} ({} words) → ambient only, no memory",
+                    captures_this_hour, app_name, capture_text.split_whitespace().count());
             }
 
             // Detect "reattend" keyword in captured text (triggers enhanced search)
@@ -1439,8 +1437,11 @@ pub fn run() {
                     }
                 });
 
+            // tray-icon.png is a black-on-transparent silhouette derived from
+            // the brand mark — macOS uses the alpha mask to draw the icon and
+            // recolors automatically based on light/dark menu bar.
             #[cfg(target_os = "macos")]
-            { tray_builder = tray_builder.icon_as_template(false); }
+            { tray_builder = tray_builder.icon_as_template(true); }
 
             let _tray = tray_builder.build(app)?;
 
