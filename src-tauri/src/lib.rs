@@ -1,6 +1,6 @@
 use tauri::{
     image::Image,
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Listener, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder,
 };
@@ -465,9 +465,29 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
         // duplicates. A system notification confirms the capture so the
         // user knows it landed without having to open the dashboard.
         if ticks % 3 == 0 {
+            // User-initiated snooze (tray menu → "Pause clipboard …"). Reads
+            // the deadline directly from the config table on each poll so a
+            // mid-loop pause takes effect within ~6 seconds without
+            // restarting anything.
+            let snooze_until = db
+                .get_config("clipboard_snooze_until")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            let clipboard_active = snooze_until <= std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+
             match platform::platform_read_clipboard() {
                 None => {
                     // Empty clipboard — nothing to do.
+                }
+                Some(clip_text) if !clipboard_active => {
+                    // Snoozed — keep last_clipboard_text in sync so we don't
+                    // fire on the FIRST copy after the snooze expires (which
+                    // would leak whatever was on the clipboard during the
+                    // pause window). Only fresh copies after resume capture.
+                    last_clipboard_text = clip_text;
                 }
                 Some(clip_text) => {
                     if clip_text == last_clipboard_text {
@@ -508,7 +528,7 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                                             println!("[clipboard] captured server_id={} preview={:?}", server_id, body);
                                             // Chip toast — works in dev (the system notification
                                             // doesn't, due to the missing bundle identity).
-                                            create_clipboard_chip(&app_handle_for_chip, &body);
+                                            create_clipboard_chip(&app_handle_for_chip);
                                             // System notification — silent in dev, works in the
                                             // bundled .app. Try anyway; failures are non-fatal.
                                             use tauri_plugin_notification::NotificationExt;
@@ -896,6 +916,61 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
     }
 }
 
+// ── Clipboard snooze ──────────────────────────────────────────────────
+//
+// When the user picks "Pause clipboard …" from the tray menu we write a
+// unix-epoch deadline into the config table. The clipboard branch of
+// passive_capture_loop reads it on every poll and skips the POST until
+// the deadline passes. duration_secs == 0 clears the snooze (Resume now).
+
+fn now_epoch_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+fn clipboard_snooze_until(app: &tauri::AppHandle) -> i64 {
+    let db = match app.try_state::<std::sync::Arc<db::Database>>() {
+        Some(d) => d,
+        None => return 0,
+    };
+    db.get_config("clipboard_snooze_until")
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or(0)
+}
+
+fn clipboard_snooze_status_label(app: &tauri::AppHandle) -> String {
+    let until = clipboard_snooze_until(app);
+    let now = now_epoch_secs();
+    if until <= now {
+        return "Clipboard auto-capture: ON".to_string();
+    }
+    let remaining_secs = until - now;
+    let label = if remaining_secs >= 3600 {
+        format!("{}h {}m", remaining_secs / 3600, (remaining_secs % 3600) / 60)
+    } else if remaining_secs >= 60 {
+        format!("{}m", remaining_secs / 60)
+    } else {
+        format!("{}s", remaining_secs)
+    };
+    format!("Clipboard paused · {} left", label)
+}
+
+fn set_clipboard_snooze(app: &tauri::AppHandle, duration_secs: i64) {
+    let db = match app.try_state::<std::sync::Arc<db::Database>>() {
+        Some(d) => d,
+        None => return,
+    };
+    let until = if duration_secs <= 0 { 0 } else { now_epoch_secs() + duration_secs };
+    let _ = db.set_config("clipboard_snooze_until", &until.to_string());
+    if duration_secs <= 0 {
+        println!("[clipboard] resumed");
+    } else {
+        println!("[clipboard] paused for {}s (until epoch {})", duration_secs, until);
+    }
+}
+
 fn text_similarity(a: &str, b: &str) -> f64 {
     let words_a: std::collections::HashSet<&str> = a.split_whitespace().collect();
     let words_b: std::collections::HashSet<&str> = b.split_whitespace().collect();
@@ -960,9 +1035,9 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
 /// capture succeeds. Replaces the system notification, which is unreliable
 /// in `tauri dev` because the dev binary doesn't have a real macOS bundle
 /// identity. The chip self-closes from the React side.
-fn create_clipboard_chip(app: &tauri::AppHandle, preview: &str) {
+fn create_clipboard_chip(app: &tauri::AppHandle) {
     let app_clone = app.clone();
-    let url = format!("/?preview={}", urlencoding::encode(preview));
+    let url = "/".to_string();
     let width = 360.0_f64;
     let height = 64.0_f64;
     let margin = 16.0_f64;
@@ -1373,10 +1448,31 @@ pub fn run() {
             let capture = MenuItem::with_id(app, "capture", "Quick Capture", true, None::<&str>)?;
             let ask = MenuItem::with_id(app, "ask", "Ask Memory", true, None::<&str>)?;
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+
+            // Clipboard auto-capture submenu. The label on the parent reflects
+            // the current snooze state when the menu is opened (set below
+            // before `tray_builder.menu(&menu)` runs).
+            let clip_pause_15 = MenuItem::with_id(app, "clip_pause_15m", "Pause for 15 minutes", true, None::<&str>)?;
+            let clip_pause_1h = MenuItem::with_id(app, "clip_pause_1h", "Pause for 1 hour", true, None::<&str>)?;
+            let clip_pause_day = MenuItem::with_id(app, "clip_pause_day", "Pause for the day", true, None::<&str>)?;
+            let clip_resume = MenuItem::with_id(app, "clip_resume", "Resume now", true, None::<&str>)?;
+            let clip_status_label = clipboard_snooze_status_label(app.handle());
+            let clip_submenu = Submenu::with_id_and_items(
+                app, "clip_menu", &clip_status_label, true,
+                &[&clip_pause_15, &clip_pause_1h, &clip_pause_day, &clip_resume],
+            )?;
+
             let sep1 = PredefinedMenuItem::separator(app)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
             let sep3 = PredefinedMenuItem::separator(app)?;
-            let menu = Menu::with_items(app, &[&open_main, &sep1, &capture, &ask, &sep2, &settings, &sep3, &quit])?;
+            let sep4 = PredefinedMenuItem::separator(app)?;
+            let menu = Menu::with_items(app, &[
+                &open_main, &sep1,
+                &capture, &ask, &sep2,
+                &clip_submenu, &sep3,
+                &settings, &sep4,
+                &quit,
+            ])?;
 
             let icon = Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
                 .expect("failed to load tray icon");
@@ -1413,6 +1509,10 @@ pub fn run() {
                             // dashboard + nav-emit dance the old code did).
                             create_window(app, "settings", "Reattend Settings", "/", 480.0, 540.0);
                         }
+                        "clip_pause_15m" => set_clipboard_snooze(app, 15 * 60),
+                        "clip_pause_1h"  => set_clipboard_snooze(app, 60 * 60),
+                        "clip_pause_day" => set_clipboard_snooze(app, 24 * 60 * 60),
+                        "clip_resume"    => set_clipboard_snooze(app, 0),
                         _ => {}
                     }
                 });

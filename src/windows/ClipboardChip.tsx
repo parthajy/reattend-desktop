@@ -10,24 +10,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Check, Sparkles } from "lucide-react";
+import { Check } from "lucide-react";
 
 const VISIBLE_MS = 2400;
 const FADE_MS = 220;
 
-function getInitialPreview(): string {
-  const params = new URLSearchParams(window.location.search);
-  const raw = params.get("preview") || params.get("data") || "";
-  if (!raw) return "Captured to Reattend.";
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
-
 export function ClipboardChip() {
-  const [preview] = useState(getInitialPreview);
   const [phase, setPhase] = useState<"in" | "hold" | "out">("in");
   const closeTimer = useRef<number | null>(null);
   const fadeTimer = useRef<number | null>(null);
@@ -69,20 +57,12 @@ export function ClipboardChip() {
         transition: `opacity ${FADE_MS}ms ease, transform ${FADE_MS}ms ease`,
       }}
     >
-      <div className="flex-1 flex items-center gap-3 px-3.5 py-2.5 ring-1 ring-zinc-200 dark:ring-zinc-800">
-        <div className="relative shrink-0">
-          <div className="w-7 h-7 rounded-full bg-emerald-500/12 flex items-center justify-center">
-            <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" strokeWidth={2.5} />
-          </div>
-          <Sparkles className="w-2.5 h-2.5 text-indigo-500 absolute -right-0.5 -top-0.5 drop-shadow-sm" />
+      <div className="flex-1 flex items-center gap-3 px-4 rounded-xl ring-1 ring-zinc-200 dark:ring-zinc-800">
+        <div className="w-7 h-7 rounded-full bg-emerald-500/15 flex items-center justify-center shrink-0">
+          <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" strokeWidth={2.75} />
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-zinc-400 mb-0.5">
-            Captured to Reattend
-          </div>
-          <div className="text-[12.5px] text-zinc-800 dark:text-zinc-100 leading-tight truncate">
-            {preview}
-          </div>
+        <div className="text-[13px] font-medium text-zinc-800 dark:text-zinc-100 truncate">
+          Captured to memory successfully
         </div>
       </div>
     </div>
