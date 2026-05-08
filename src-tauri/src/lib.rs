@@ -458,18 +458,66 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
         }
 
         // --- Signal 1: Clipboard capture (every ~6s) ---
+        // Smart clipboard: when the user copies a meaningful chunk of text
+        // (≥5 words / ≥30 chars), POST it straight to /api/tray/capture so
+        // the server triages immediately. We dedupe on text content within
+        // the running session — the server's own dedup catches longer-lived
+        // duplicates. A system notification confirms the capture so the
+        // user knows it landed without having to open the dashboard.
         if ticks % 3 == 0 {
             if let Some(clip_text) = platform::platform_read_clipboard() {
                 if clip_text != last_clipboard_text {
                     last_clipboard_text = clip_text.clone();
                     if clip_text.split_whitespace().count() >= 5 && clip_text.len() >= 30 {
-                        let meta = serde_json::json!({
-                            "capture_type": "clipboard",
-                            "app_name": &last_app_name,
-                        });
-                        if let Ok(raw_id) = db.insert_raw_item(&clip_text, "tray_clipboard", None, Some(&meta.to_string())) {
-                            let payload = serde_json::json!({ "raw_item_id": raw_id }).to_string();
-                            let _ = db.queue_job("triage", &payload);
+                        let server_url = db.get_config("server_url")
+                            .unwrap_or_else(|| "https://reattend.com".to_string());
+                        let token = db.get_config("auth_token").unwrap_or_default();
+                        if !token.is_empty() {
+                            let app_name_for_meta = last_app_name.clone();
+                            let text_for_post = clip_text.clone();
+                            let app_handle_for_chip = app_handle.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let metadata = Some(serde_json::json!({
+                                    "capture_type": "clipboard",
+                                    "app_name": app_name_for_meta,
+                                }));
+                                match crate::api::capture(
+                                    &server_url, &token, &text_for_post,
+                                    "tray_clipboard", metadata,
+                                ).await {
+                                    Ok(server_id) => {
+                                        let preview: String = text_for_post.chars().take(80).collect();
+                                        let body = if text_for_post.chars().count() > 80 {
+                                            format!("{}…", preview)
+                                        } else {
+                                            preview
+                                        };
+                                        // Notification confirms the capture.
+                                        // Failures are silent — the server
+                                        // accepted the capture, that's the
+                                        // load-bearing part.
+                                        use tauri_plugin_notification::NotificationExt;
+                                        let _ = app_handle_for_chip.notification()
+                                            .builder()
+                                            .title("Captured to Reattend")
+                                            .body(&body)
+                                            .show();
+                                        // Also fan out a Tauri event in case
+                                        // a chip-style UI subscribes later.
+                                        use tauri::Emitter;
+                                        let _ = app_handle_for_chip.emit(
+                                            "clipboard_captured",
+                                            serde_json::json!({
+                                                "id": server_id,
+                                                "preview": body,
+                                            }),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        eprintln!("[clipboard] capture failed: {}", e);
+                                    }
+                                }
+                            });
                         }
                     }
                 }
