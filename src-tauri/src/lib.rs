@@ -408,9 +408,11 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
     let mut hour_start = std::time::Instant::now();
 
     // Ambient recall: in-memory embedding cache + dedup
+    // embedding_cache feeds the dormant writing-assist path. Once that's
+    // routed through a server endpoint too, this and embedding_cache_age
+    // can both go.
     let embedding_cache: std::sync::Arc<tokio::sync::RwLock<Vec<(String, Vec<f64>)>>> =
         std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new()));
-    let mut embedding_cache_age: u32 = u32::MAX; // force refresh on first use
     let recently_shown: std::sync::Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
     // Track last popup time for meeting cooldown
@@ -437,8 +439,6 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
                 // Clear per-app dedup state (stale after sleep)
                 per_app_text.clear();
                 last_capture_text.clear();
-                // Force embedding cache refresh and re-enable verbose logging
-                embedding_cache_age = u32::MAX;
                 ticks = 1;
                 // Small delay to let network/display settle after wake
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
@@ -807,167 +807,87 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
             // Detect "reattend" keyword in captured text (triggers enhanced search)
             let keyword_triggered = capture_text.to_lowercase().contains("reattend");
 
-            // Ambient recall: semantic search for related memories
-            // Skip if writing assist already fired (they share the same popup window)
+            // Ambient recall — thin-client form. The server runs the embed
+            // + LLM gate at /api/tray/analyze and only returns content when
+            // there's something genuinely worth interrupting for. We just
+            // gate on snooze + cooldown, then post and render the popup if
+            // the response carries context.
+            //
+            // Writing assist still uses the local embedder path above (it's
+            // dormant until the embedder is reintroduced or proxied through
+            // a similar server endpoint). The recently_shown / cache_ref /
+            // embedding_cache_age locals defined earlier in the function are
+            // load-bearing for that path; leaving them as-is.
             if !writing_assist_fired {
-                let now = std::time::SystemTime::now()
+                let now_epoch = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs() as i64;
                 let snoozed_until = SNOOZE_UNTIL.load(std::sync::atomic::Ordering::SeqCst);
-                // During meetings or keyword trigger, bypass snooze
-                let snooze_ok = now >= snoozed_until || in_meeting || keyword_triggered;
-                if snooze_ok && ai::is_embedder_ready() {
-                    // Refresh embedding cache every ~60 ticks (~2 min) or on first use
-                    if embedding_cache_age > 60 {
-                        if let Ok(fresh) = db.get_all_embeddings() {
-                            let mut cache = embedding_cache.write().await;
-                            *cache = fresh;
-                            embedding_cache_age = 0;
-                        }
-                    }
-                    embedding_cache_age += 1;
+                let snooze_ok = now_epoch >= snoozed_until || in_meeting || keyword_triggered;
 
+                let last_popup = last_popup_epoch.load(std::sync::atomic::Ordering::Relaxed);
+                let cooldown_ok = now_epoch - last_popup >= AMBIENT_POPUP_COOLDOWN_SECS as i64;
+
+                let server_url = db.get_config("server_url")
+                    .unwrap_or_else(|| "https://reattend.com".to_string());
+                let token = db.get_config("auth_token").unwrap_or_default();
+
+                if snooze_ok && cooldown_ok && !token.is_empty() {
                     let recall_text = capture_text.clone();
+                    let app_name_for_analyze = app_name.clone();
                     let recall_handle = app_handle.clone();
-                    let cache_ref = std::sync::Arc::clone(&embedding_cache);
-                    let shown_ref = std::sync::Arc::clone(&recently_shown);
-                    let recall_db = std::sync::Arc::clone(&*db);
                     let popup_epoch_ref = std::sync::Arc::clone(&last_popup_epoch);
+                    let shown_ref = std::sync::Arc::clone(&recently_shown);
 
-                    let is_meeting_mode = in_meeting;
-                    let is_keyword = keyword_triggered;
                     tauri::async_runtime::spawn(async move {
-                        // Truncate to ~500 chars for embedding (enough for semantic matching)
-                        let query_text = if recall_text.len() > 500 {
-                            &recall_text[..500]
-                        } else {
-                            &recall_text
-                        };
-
-                        let query_vec = match ai::embed_query(query_text).await {
-                            Ok(v) => v,
-                            Err(_) => return,
-                        };
-
-                        let cached = cache_ref.read().await;
-                        if cached.is_empty() { return; }
-
-                        // Lower threshold during meetings (0.45) or keyword trigger (0.40) vs normal (0.55)
-                        let threshold = if is_keyword { 0.40 } else if is_meeting_mode { 0.45 } else { 0.55 };
-
-                        let mut similarities: Vec<(String, f64)> = cached
-                            .iter()
-                            .map(|(id, vec)| (id.clone(), ai::cosine_similarity(&query_vec, vec)))
-                            .filter(|(_, sim)| *sim > threshold)
-                            .collect();
-                        drop(cached);
-                        similarities.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-                        let top: Vec<(String, f64)> = similarities.into_iter().take(3).collect();
-                        if top.is_empty() { return; }
-
-                        // Dedup: skip if we recently showed the same set of memories
-                        let top_key = top.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>().join(",");
-                        {
-                            let mut shown = shown_ref.lock().await;
-                            if shown.contains(&top_key) { return; }
-                            shown.insert(top_key);
-                            // Keep set bounded — clear if too large
-                            if shown.len() > 50 { shown.clear(); }
-                        }
-
-                        // Fetch full records for synthesis
-                        let records: Vec<(String, String, Option<String>, Option<String>, String)> = top
-                            .iter()
-                            .filter_map(|(id, _)| {
-                                recall_db.get_record(id).ok().map(|r| {
-                                    (r.id, r.title, r.summary, r.content, r.record_type)
-                                })
-                            })
-                            .collect();
-
-                        if records.is_empty() { return; }
-
-                        // Create AI client for synthesis
-                        let ai_provider = recall_db.get_config("ai_provider").unwrap_or_else(|| "server".to_string());
-                        let client = if ai_provider == "server" {
-                            let server_url = recall_db.get_config("server_url")
-                                .unwrap_or_else(|| "https://reattend.com".to_string());
-                            let device_id = recall_db.get_config("device_id").unwrap_or_default();
-                            let auth_token = recall_db.get_config("auth_token").unwrap_or_default();
-                            ai::AiClient::new_server(&server_url, &device_id, &auth_token)
-                        } else if ai_provider == "groq" {
-                            let key = recall_db.get_config("groq_api_key").unwrap_or_default();
-                            ai::AiClient::new_groq(&key)
-                        } else {
-                            let url = recall_db.get_config("ollama_url").unwrap_or_else(|| "http://localhost:11434".to_string());
-                            let model = recall_db.get_config("ollama_model").unwrap_or_else(|| "llama3.2:3b".to_string());
-                            ai::AiClient::new_ollama(&url, &model)
-                        };
-
-                        // Synthesize insight via LLM (with timeout)
-                        let synthesis = match tokio::time::timeout(
-                            tokio::time::Duration::from_secs(15),
-                            client.synthesize_ambient(&recall_text, &records)
+                        let response = match crate::api::analyze(
+                            &server_url, &token, &recall_text, &app_name_for_analyze,
                         ).await {
-                            Ok(Ok(s)) => s,
-                            Ok(Err(e)) => {
-                                println!("[Ambient] Synthesis error: {}", e);
-                                return;
-                            }
-                            Err(_) => {
-                                println!("[Ambient] Synthesis timed out");
+                            Ok(v) => v,
+                            Err(e) => {
+                                eprintln!("[ambient] analyze failed: {}", e);
                                 return;
                             }
                         };
 
-                        // During meetings or keyword trigger: always show if LLM says show,
-                        // or if similarity was very high (>0.7) even if LLM says no
-                        let force_show = (is_meeting_mode || is_keyword) && top.first().map(|(_, s)| *s > 0.7).unwrap_or(false);
-                        if !force_show && (!synthesis.show || synthesis.insight.is_empty()) {
-                            println!("[Ambient] LLM decided not to show (not relevant enough)");
+                        let context = response.get("context")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let related = response.get("related")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+
+                        if context.is_empty() || related.is_empty() {
+                            // Server decided not to show (no contradiction /
+                            // forgotten commitment / critical context).
                             return;
                         }
 
-                        // If LLM said no but we're forcing, use a simple fallback insight
-                        let insight = if synthesis.insight.is_empty() || (!synthesis.show && force_show) {
-                            let titles: Vec<String> = records.iter().map(|(_, t, _, _, _)| t.clone()).collect();
-                            format!("Related context from your memories: {}", titles.join(", "))
-                        } else {
-                            synthesis.insight
-                        };
-
-                        // Global popup cooldown — applies always, stricter outside meetings
-                        {
-                            let last = popup_epoch_ref.load(std::sync::atomic::Ordering::Relaxed);
-                            let now_epoch = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
-                            // is_meeting_mode used to shorten the cooldown when the
-                            // mic recorder was active. Recorder gone — single cooldown.
-                            let _ = is_meeting_mode;
-                            let cooldown = AMBIENT_POPUP_COOLDOWN_SECS as i64;
-                            if now_epoch - last < cooldown {
-                                println!("[Ambient] Skipping popup — cooldown ({} secs remaining)", cooldown - (now_epoch - last));
-                                return;
-                            }
+                        // Dedup: skip if we just showed this same memory set
+                        let top_key: String = related.iter()
+                            .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        if !top_key.is_empty() {
+                            let mut shown = shown_ref.lock().await;
+                            if shown.contains(&top_key) { return; }
+                            shown.insert(top_key);
+                            if shown.len() > 50 { shown.clear(); }
                         }
 
-                        println!("[Ambient] Showing synthesized insight: {}...", &insight[..80.min(insight.len())]);
-
-                        // Update popup cooldown
+                        println!("[ambient] showing: {}…", &context[..80.min(context.len())]);
                         let now_epoch = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
                         popup_epoch_ref.store(now_epoch, std::sync::atomic::Ordering::Relaxed);
 
                         let popup_data = serde_json::json!({
-                            "insight": insight,
-                            "sources": synthesis.sources,
-                            "meeting_mode": is_meeting_mode,
+                            "insight": context,
+                            "sources": related,
                         });
                         let popup_json = serde_json::to_string(&popup_data).unwrap_or_default();
-                        let encoded = urlencoding::encode(&popup_json);
-                        let popup_url = format!("/?data={}", encoded);
+                        let popup_url = format!("/?data={}", urlencoding::encode(&popup_json));
                         create_ambient_popup(&recall_handle, &popup_url);
                     });
                 }
