@@ -66,6 +66,7 @@ export interface AskSource {
   id: string;
   title: string;
   type: string;
+  date?: string;
 }
 
 export interface AskAnswer {
@@ -73,31 +74,113 @@ export interface AskAnswer {
   sources: AskSource[];
 }
 
-/** Ask a question across the user's memory. Returns the full answer at
- *  once (the server's /api/ask endpoint streams; we collect the stream
- *  here and return the joined text — keeps the desktop UI simple). */
-export async function askServer(question: string, signal?: AbortSignal): Promise<AskAnswer> {
-  const res = await authedFetch("/api/ask", {
+function parseSourcesHeader(header: string | null): AskSource[] {
+  if (!header) return [];
+  // X-Sources is an ASCII-safe JSON string with non-ASCII chars escaped as
+  // \uXXXX. Run JSON.parse twice — once via a wrapping JSON string to undo
+  // the \u escapes, once on the array itself.
+  try {
+    const decoded = JSON.parse(`"${header.replace(/"/g, '\\"')}"`);
+    const parsed = JSON.parse(decoded);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    try {
+      const parsed = JSON.parse(header);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  }
+}
+
+/** Stream the answer to a question, calling onChunk with each text chunk as
+ *  it arrives. Resolves with the joined text + source list when the stream
+ *  ends. /api/tray/ask streams plain text and emits source chips in the
+ *  X-Sources header. */
+export async function askServerStream(
+  question: string,
+  onChunk: (chunk: string) => void,
+  signal?: AbortSignal,
+): Promise<AskAnswer> {
+  const res = await authedFetch("/api/tray/ask", {
     method: "POST",
-    body: JSON.stringify({ question, history: [] }),
+    body: JSON.stringify({ question }),
     signal,
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Ask failed (${res.status}): ${body || res.statusText}`);
   }
-  // /api/ask streams as plain text. Sources are passed in the X-Sources
-  // header as a JSON array.
-  const text = await res.text();
-  let sources: AskSource[] = [];
-  const sourcesHeader = res.headers.get("X-Sources");
-  if (sourcesHeader) {
-    try {
-      const parsed = JSON.parse(sourcesHeader);
-      if (Array.isArray(parsed)) sources = parsed;
-    } catch { /* keep empty */ }
+  const sources = parseSourcesHeader(res.headers.get("X-Sources"));
+
+  if (!res.body) {
+    const text = await res.text();
+    onChunk(text);
+    return { text, sources };
   }
-  return { text, sources };
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    if (chunk) {
+      full += chunk;
+      onChunk(chunk);
+    }
+  }
+  const tail = decoder.decode();
+  if (tail) {
+    full += tail;
+    onChunk(tail);
+  }
+  return { text: full, sources };
+}
+
+// ── Oracle (Deepthink) ───────────────────────────────────────────────────
+
+export interface OracleSource {
+  id: string;
+  title: string;
+  type: string;
+  date: string | null;
+  passage: string | null;
+}
+
+export interface OracleDossier {
+  situation: string;
+  evidence: string;
+  risks: string;
+  recommendations: string;
+  unknowns: string;
+}
+
+export interface OracleResponse {
+  question: string;
+  dossier: OracleDossier;
+  sources: OracleSource[];
+  meta: {
+    candidatesScanned: number;
+    accessibleFiltered: number;
+    reranked: number;
+    elapsedMs: number;
+  };
+}
+
+/** Deepthink: structured 5-section dossier (Situation / Evidence / Risks /
+ *  Recommendations / Unknowns). Takes 20-40s on real queries — the UI
+ *  should show a thinking indicator. */
+export async function askOracle(question: string, signal?: AbortSignal): Promise<OracleResponse> {
+  const res = await authedFetch("/api/tray/ask/oracle", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Oracle failed (${res.status}): ${body || res.statusText}`);
+  }
+  return await res.json() as OracleResponse;
 }
 
 // ── Recent captures ──────────────────────────────────────────────────────
