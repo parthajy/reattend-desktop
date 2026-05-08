@@ -465,59 +465,73 @@ async fn passive_capture_loop(app_handle: tauri::AppHandle) {
         // duplicates. A system notification confirms the capture so the
         // user knows it landed without having to open the dashboard.
         if ticks % 3 == 0 {
-            if let Some(clip_text) = platform::platform_read_clipboard() {
-                if clip_text != last_clipboard_text {
-                    last_clipboard_text = clip_text.clone();
-                    if clip_text.split_whitespace().count() >= 5 && clip_text.len() >= 30 {
-                        let server_url = db.get_config("server_url")
-                            .unwrap_or_else(|| "https://reattend.com".to_string());
-                        let token = db.get_config("auth_token").unwrap_or_default();
-                        if !token.is_empty() {
-                            let app_name_for_meta = last_app_name.clone();
-                            let text_for_post = clip_text.clone();
-                            let app_handle_for_chip = app_handle.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let metadata = Some(serde_json::json!({
-                                    "capture_type": "clipboard",
-                                    "app_name": app_name_for_meta,
-                                }));
-                                match crate::api::capture(
-                                    &server_url, &token, &text_for_post,
-                                    "tray_clipboard", metadata,
-                                ).await {
-                                    Ok(server_id) => {
-                                        let preview: String = text_for_post.chars().take(80).collect();
-                                        let body = if text_for_post.chars().count() > 80 {
-                                            format!("{}…", preview)
-                                        } else {
-                                            preview
-                                        };
-                                        // Notification confirms the capture.
-                                        // Failures are silent — the server
-                                        // accepted the capture, that's the
-                                        // load-bearing part.
-                                        use tauri_plugin_notification::NotificationExt;
-                                        let _ = app_handle_for_chip.notification()
-                                            .builder()
-                                            .title("Captured to Reattend")
-                                            .body(&body)
-                                            .show();
-                                        // Also fan out a Tauri event in case
-                                        // a chip-style UI subscribes later.
-                                        use tauri::Emitter;
-                                        let _ = app_handle_for_chip.emit(
-                                            "clipboard_captured",
-                                            serde_json::json!({
-                                                "id": server_id,
-                                                "preview": body,
-                                            }),
-                                        );
+            match platform::platform_read_clipboard() {
+                None => {
+                    // Empty clipboard — nothing to do.
+                }
+                Some(clip_text) => {
+                    if clip_text == last_clipboard_text {
+                        // Unchanged since last poll — silent skip.
+                    } else {
+                        last_clipboard_text = clip_text.clone();
+                        let words = clip_text.split_whitespace().count();
+                        let chars = clip_text.len();
+                        if words < 5 || chars < 30 {
+                            println!("[clipboard] below threshold: {} words / {} chars (need ≥5 words & ≥30 chars)", words, chars);
+                        } else {
+                            let server_url = db.get_config("server_url")
+                                .unwrap_or_else(|| "https://reattend.com".to_string());
+                            let token = db.get_config("auth_token").unwrap_or_default();
+                            if token.is_empty() {
+                                println!("[clipboard] skipped: no auth_token (open Settings → connect)");
+                            } else {
+                                println!("[clipboard] sending {} chars / {} words to {}/api/tray/capture", chars, words, server_url);
+                                let app_name_for_meta = last_app_name.clone();
+                                let text_for_post = clip_text.clone();
+                                let app_handle_for_chip = app_handle.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let metadata = Some(serde_json::json!({
+                                        "capture_type": "clipboard",
+                                        "app_name": app_name_for_meta,
+                                    }));
+                                    match crate::api::capture(
+                                        &server_url, &token, &text_for_post,
+                                        "tray_clipboard", metadata,
+                                    ).await {
+                                        Ok(server_id) => {
+                                            let preview: String = text_for_post.chars().take(80).collect();
+                                            let body = if text_for_post.chars().count() > 80 {
+                                                format!("{}…", preview)
+                                            } else {
+                                                preview
+                                            };
+                                            println!("[clipboard] captured server_id={} preview={:?}", server_id, body);
+                                            // Chip toast — works in dev (the system notification
+                                            // doesn't, due to the missing bundle identity).
+                                            create_clipboard_chip(&app_handle_for_chip, &body);
+                                            // System notification — silent in dev, works in the
+                                            // bundled .app. Try anyway; failures are non-fatal.
+                                            use tauri_plugin_notification::NotificationExt;
+                                            let _ = app_handle_for_chip.notification()
+                                                .builder()
+                                                .title("Captured to Reattend")
+                                                .body(&body)
+                                                .show();
+                                            use tauri::Emitter;
+                                            let _ = app_handle_for_chip.emit(
+                                                "clipboard_captured",
+                                                serde_json::json!({
+                                                    "id": server_id,
+                                                    "preview": body,
+                                                }),
+                                            );
+                                        }
+                                        Err(e) => {
+                                            eprintln!("[clipboard] capture failed: {}", e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        eprintln!("[clipboard] capture failed: {}", e);
-                                    }
-                                }
-                            });
+                                });
+                            }
                         }
                     }
                 }
@@ -1021,6 +1035,52 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
 
 // (create_meeting_result_window removed with audio recorder strip — only
 // fired after a transcription job, and the transcribe pipeline is gone.)
+
+/// Tiny floating "Captured" toast that shows for ~2.4s after a clipboard
+/// capture succeeds. Replaces the system notification, which is unreliable
+/// in `tauri dev` because the dev binary doesn't have a real macOS bundle
+/// identity. The chip self-closes from the React side.
+fn create_clipboard_chip(app: &tauri::AppHandle, preview: &str) {
+    let app_clone = app.clone();
+    let url = format!("/?preview={}", urlencoding::encode(preview));
+    let width = 360.0_f64;
+    let height = 64.0_f64;
+    let margin = 16.0_f64;
+    let _ = app.run_on_main_thread(move || {
+        let app = app_clone;
+
+        // If a chip is already up (rapid successive captures), close it so
+        // the new one renders cleanly — there's only ever one chip on screen.
+        if let Some(window) = app.get_webview_window("clipboard-chip") {
+            let _ = window.close();
+        }
+
+        // Top-right of the primary monitor, just under the menu bar — clear
+        // of the tray icon's own coordinates and any always-on-top windows.
+        let (x, y) = if let Some(monitor) = app.primary_monitor().ok().flatten() {
+            let size = monitor.size();
+            let scale = monitor.scale_factor();
+            let screen_w = size.width as f64 / scale;
+            (screen_w - width - margin, margin + 28.0)
+        } else {
+            (1000.0, 56.0)
+        };
+
+        if let Ok(window) = WebviewWindowBuilder::new(&app, "clipboard-chip", WebviewUrl::App(url.into()))
+            .title("Reattend Capture")
+            .inner_size(width, height)
+            .position(x, y)
+            .resizable(false)
+            .decorations(false)
+            .always_on_top(true)
+            .visible(true)
+            .focused(false)
+            .build()
+        {
+            platform::platform_elevate_window(&window);
+        }
+    });
+}
 
 // create_main_window removed 2026-05-05: tray-only architecture has no
 // dashboard window. "Open Dashboard" opens reattend.com/app in the user's

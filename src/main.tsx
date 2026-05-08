@@ -13,6 +13,7 @@ import { CaptureWindow } from "./windows/CaptureWindow";
 import { AskWindow } from "./windows/AskWindow";
 import { SettingsWindow } from "./windows/SettingsWindow";
 import { AmbientPopup } from "./windows/AmbientPopup";
+import { ClipboardChip } from "./windows/ClipboardChip";
 import "./styles.css";
 
 // Tray-only architecture (2026-05-08): the desktop app no longer ships a
@@ -41,6 +42,8 @@ function Root() {
       return <AskWindow />;
     case "ambient":
       return <AmbientPopup />;
+    case "clipboard-chip":
+      return <ClipboardChip />;
     case "settings":
     default:
       return <SettingsWindow />;
