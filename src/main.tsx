@@ -1,4 +1,4 @@
-import React, { lazy, Suspense } from "react";
+import React from "react";
 import ReactDOM from "react-dom/client";
 import * as Sentry from "@sentry/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -8,20 +8,29 @@ Sentry.init({
   environment: "production",
   tracesSampleRate: 0.1,
 });
+
 import { CaptureWindow } from "./windows/CaptureWindow";
 import { AskWindow } from "./windows/AskWindow";
 import { SettingsWindow } from "./windows/SettingsWindow";
 import { AmbientPopup } from "./windows/AmbientPopup";
-// (MeetingIndicator + MeetingResult windows removed with the audio
-// recorder strip — they were only opened by the mic recorder pipeline.)
 import "./styles.css";
 
-// Lazy-load the full app — keeps popup windows lightweight
-const MainApp = lazy(() =>
-  import("@/app/App").then((m) => ({ default: m.App }))
-);
+// Tray-only architecture (2026-05-08): the desktop app no longer ships a
+// dashboard window. Every interactive surface is one of four lightweight
+// floating windows, each routed by Tauri window label below:
+//
+//   capture  — Quick Capture firehose (⌘⇧R)
+//   ask      — Spotlight-style ask (⌘⇧A)
+//   settings — Token paste + account info + theme
+//   ambient  — Ambient insight popup (background-spawned)
+//
+// "Open Dashboard" in the tray menu (and ⌘⇧O) opens the user's default
+// browser at https://reattend.com/app instead of creating a Tauri window
+// — the full memory experience lives on the web.
+//
+// Any unrecognized window label falls through to SettingsWindow so a
+// stray invocation surfaces something useful instead of a blank screen.
 
-// Route based on window label instead of URL path.
 const label = getCurrentWindow().label;
 
 function Root() {
@@ -30,25 +39,11 @@ function Root() {
       return <CaptureWindow />;
     case "ask":
       return <AskWindow />;
-    case "settings":
-      return <SettingsWindow />;
     case "ambient":
       return <AmbientPopup />;
-    // (meeting-indicator + meeting-result window cases removed with the
-    // audio recorder strip — those windows were only opened by the mic
-    // recorder. Labels still ever delivered will fall through to <MainApp />,
-    // which is harmless.)
-    case "main":
+    case "settings":
     default:
-      return (
-        <Suspense
-          fallback={
-            <div className="flex items-center justify-center h-screen bg-background" />
-          }
-        >
-          <MainApp />
-        </Suspense>
-      );
+      return <SettingsWindow />;
   }
 }
 

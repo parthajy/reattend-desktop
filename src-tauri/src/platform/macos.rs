@@ -5,7 +5,6 @@ extern "C" {
     fn elevate_ns_window(ns_window_ptr: *mut std::ffi::c_void);
     fn activate_reattend_app();
     fn hide_from_dock();
-    fn show_in_dock();
     fn register_services_provider();
     fn check_screen_capture_permission() -> bool;
     fn request_screen_capture_permission() -> bool;
@@ -73,10 +72,8 @@ pub fn platform_hide_from_dock() {
     unsafe { hide_from_dock(); }
 }
 
-/// Show app in Dock (when main window opens — switch to Regular activation policy).
-pub fn platform_show_in_dock() {
-    unsafe { show_in_dock(); }
-}
+// platform_show_in_dock removed 2026-05-05: tray-only architecture never
+// returns to the Dock. The app stays LSUIElement for its whole lifetime.
 
 /// Register macOS Services provider for right-click "Save to Reattend".
 pub fn platform_register_context_menu() {

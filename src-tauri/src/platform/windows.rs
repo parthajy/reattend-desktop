@@ -16,10 +16,8 @@ pub fn platform_hide_from_dock() {
     // Tray-only Tauri apps on Windows don't appear in the taskbar by default
 }
 
-/// Show app in taskbar — no-op on Windows (main window shows automatically).
-pub fn platform_show_in_dock() {
-    // Windows shows the window in the taskbar automatically
-}
+// platform_show_in_dock removed 2026-05-05: tray-only architecture has
+// no main window to surface in the taskbar.
 
 /// Register context menu — no-op on Windows MVP.
 pub fn platform_register_context_menu() {

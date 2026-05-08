@@ -976,44 +976,10 @@ fn create_ambient_popup(app: &tauri::AppHandle, url: &str) {
 // (create_meeting_result_window removed with audio recorder strip — only
 // fired after a transcription job, and the transcribe pipeline is gone.)
 
-/// Open the full Reattend app in a main window (local React frontend).
-fn create_main_window(app: &tauri::AppHandle) {
-    let app_clone = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        let app = app_clone;
-
-        // Activate the app first (brings to foreground on macOS)
-        platform::platform_activate_app();
-        platform::platform_show_in_dock();
-
-        // If already open, focus it
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-            return;
-        }
-
-        // Load the local React frontend (not an external URL)
-        if let Ok(window) = WebviewWindowBuilder::new(
-            &app,
-            "main",
-            WebviewUrl::App("/".into()),
-        )
-        .title("Reattend")
-        .inner_size(1200.0, 800.0)
-        .min_inner_size(800.0, 500.0)
-        .resizable(true)
-        .decorations(true)
-        .always_on_top(false)
-        .center()
-        .visible(true)
-        .build()
-        {
-            let _ = window.set_focus();
-        }
-    });
-}
+// create_main_window removed 2026-05-05: tray-only architecture has no
+// dashboard window. "Open Dashboard" opens reattend.com/app in the user's
+// default browser via tauri_plugin_shell. The four floating windows
+// (capture / ask / settings / ambient) all go through create_window below.
 
 fn create_window(app: &tauri::AppHandle, label: &str, title: &str, url: &str, width: f64, height: f64) {
     let app_clone = app.clone();
@@ -1368,9 +1334,13 @@ pub fn run() {
 
             // Build tray menu
             let shortcut_prefix = platform::platform_shortcut_display();
+            // Tray-only architecture (2026-05-08): "Open Dashboard" opens the
+            // web app at reattend.com/app in the user's default browser.
+            // No more in-app dashboard window — desktop is just tray + 4
+            // floating windows (Capture, Ask, Settings, Ambient).
             let open_main = MenuItem::with_id(
                 app, "open_main",
-                &format!("Open Reattend  {}O", shortcut_prefix),
+                &format!("Open Dashboard  {}O", shortcut_prefix),
                 true, None::<&str>
             )?;
             let quit = MenuItem::with_id(app, "quit", "Quit Reattend", true, None::<&str>)?;
@@ -1391,7 +1361,16 @@ pub fn run() {
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
                         "open_main" => {
-                            create_main_window(app);
+                            // Browser, not in-app. The desktop has no dashboard
+                            // window anymore — full memory views live on the web.
+                            let app_clone = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let url = app_clone.try_state::<std::sync::Arc<db::Database>>()
+                                    .and_then(|db| db.get_config("server_url"))
+                                    .unwrap_or_else(|| "https://reattend.com".to_string());
+                                let _ = tauri_plugin_shell::ShellExt::shell(&app_clone)
+                                    .open(format!("{}/app", url.trim_end_matches('/')), None);
+                            });
                         }
                         "quit" => {
                             SHOULD_QUIT.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1403,19 +1382,10 @@ pub fn run() {
                         "ask" => {
                             create_window(app, "ask", "Ask Memory", "/", 480.0, 400.0);
                         }
-                        // ("meeting" + "meeting_notes" tray items removed with the
-                        // audio recorder strip. Meeting recording was a personal-
-                        // product feature we no longer ship.)
                         "settings" => {
-                            create_main_window(app);
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                                use tauri::Emitter;
-                                let _ = handle.emit("navigate", serde_json::json!({
-                                    "path": "/settings"
-                                }));
-                            });
+                            // Open the floating settings window (not the
+                            // dashboard + nav-emit dance the old code did).
+                            create_window(app, "settings", "Reattend Settings", "/", 480.0, 540.0);
                         }
                         _ => {}
                     }
@@ -1450,7 +1420,17 @@ pub fn run() {
             app.global_shortcut().on_shortcut(open_shortcut, {
                 let app_handle = app_handle.clone();
                 move |_app, _shortcut, _event| {
-                    create_main_window(&app_handle);
+                    // ⌘⇧O — open the dashboard in the user's default browser.
+                    // The desktop no longer ships a dashboard window; the
+                    // browser is the canonical full-memory surface.
+                    let app_clone = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let url = app_clone.try_state::<std::sync::Arc<db::Database>>()
+                            .and_then(|db| db.get_config("server_url"))
+                            .unwrap_or_else(|| "https://reattend.com".to_string());
+                        let _ = tauri_plugin_shell::ShellExt::shell(&app_clone)
+                            .open(format!("{}/app", url.trim_end_matches('/')), None);
+                    });
                 }
             })?;
 
